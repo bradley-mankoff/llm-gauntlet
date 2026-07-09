@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+results/*.json
+results/*.jsonl
+logs/*.log
+!results/.gitkeep
+!logs/.gitkeep
+
+# HF datasets (large, downloaded at runtime)
+.cache/
+
+# OS
+.DS_Store
