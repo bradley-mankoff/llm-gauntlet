@@ -12,3 +12,6 @@ logs/*.log
 
 # OS
 .DS_Store
+
+# Scout pipeline index (ChromaDB)
+.scout_index/

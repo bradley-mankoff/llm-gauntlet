@@ -106,12 +106,16 @@ All three use seed=42, temperature=0.
 | HumanEval | openai/openai_humaneval (164 problems) | 50 | Code generation (execution-based, pass@1) |
 | RepoQA | evalplus/repoqa_release (500 tasks) | 44-50 | Long-context code retrieval (BLEU ≥ 0.8) |
 
-### Scout Benchmark
+## Stress Test: Concurrent Executor + Scout
 
-| Benchmark | Codebase | n | Measures |
+Running IFEval (27B executor) and scout pipeline (Qwythos 9B) simultaneously on the same M1 Max 64GB:
+
+| Role | Solo s/sample | Concurrent s/sample | Slowdown |
 |---|---|---|---|
-| Scout Pipeline | MTPLX 2.0.2 (149 files, 11 MB) | 30 | File-level retrieval accuracy |
+| Executor (IFEval on 27B) | 22.8s | ~90s | **3.9×** |
+| Scout (pipeline on Qwythos 9B) | 40s | ~56s | 1.4× |
 
+**Memory: 63 GB / 64 GB used — 1 GB from OOM.** Running both models simultaneously is not viable on a single M1 Max. The 27B (15 GB) + Qwythos (5 GB) + embedder (1.2 GB) + reranker (2 GB) + context allocations saturate the machine. Recommendation: serve executor from the M1 Max, run scout (with a lighter model) on the main computer.
 ---
 
 ## Quick Start

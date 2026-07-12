@@ -4,10 +4,12 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "absl-py>=2.5.0",
+    "chromadb>=1.5.9",
     "datasets>=5.0.0",
     "immutabledict>=4.3.1",
     "inspect-ai>=0.3.244",
     "langdetect>=1.0.9",
     "nltk>=3.9.4",
     "openai>=2.44.0",
+    "sentence-transformers>=5.6.0",
 ]
