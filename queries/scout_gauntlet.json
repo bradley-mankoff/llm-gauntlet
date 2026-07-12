@@ -1,0 +1,50 @@
+[
+  {
+    "query": "Find the function that filters kwargs so IFEval instruction verifiers don't get unexpected arguments.",
+    "file": "tasks/ifeval.py",
+    "symbol": "_filter_kwargs_for_instruction",
+    "code": "def _filter_kwargs_for_instruction(instruction_id: str, kwargs: dict) -> dict:\n    cls = instructions_registry.INSTRUCTION_DICT[instruction_id]\n    sig = inspect.signature(cls.build_description)\n    valid = set(sig.parameters.keys()) - {\"self\"}\n    return {k: v for k, v in kwargs.items() if k in valid and v is not None}"
+  },
+  {
+    "query": "Where is the HumanEval benchmark task defined? Find the function that handles extracting code from model responses.",
+    "file": "tasks/humaneval.py",
+    "symbol": "_extract_code",
+    "code": "def _extract_code(response: str, entry_point: str) -> str | None:\n    # Strip prose prefix\n    m = re.search(r'(?:Here|Sure|Okay|The|This|Below)', response)\n    if m:\n        response = response[m.start():]\n    # Try markdown code block\n    m = re.search(r'```(?:python)?\\s*\\n(.*?)```', response, re.DOTALL)\n    if m:\n        return m.group(1).strip()\n    # Fallback: find def <entry_point>\n    pattern = rf'def\\s+{re.escape(entry_point)}\\s*\\('\n    m = re.search(pattern, response)\n    if m:\n        return response[m.start():].strip()\n    return response.strip()"
+  },
+  {
+    "query": "Find where the chat completion request is built — specifically the function that adds think_off and no_think tags to user messages.",
+    "file": "bench_client.py",
+    "symbol": "chat",
+    "code": "def chat(\n    client: OpenAI,\n    model: str,\n    messages: Iterable[dict],\n    max_tokens: int = 2048,\n    temperature: float = 0.0,\n    no_think: bool = False,\n    think_off: bool = False,\n    **kwargs,\n):\n    msgs = list(messages)\n    if msgs and msgs[-1].get(\"role\") == \"user\":\n        content = msgs[-1].get(\"content\", \"\")\n        if think_off and \"<|think_off|>\" not in content:\n            msgs[-1] = {**msgs[-1], \"content\": f\"<|think_off|>\\n{content}\"}\n        if no_think and \"/no_think\" not in content and \"<|think_off|>\" not in content:\n            sep = \"\" if content.endswith((\" \", \"\\n\", \"\\t\")) else \" \"\n            msgs[-1] = {**msgs[-1], \"content\": f\"{content}{sep}/no_think\"}\n    return client.chat.completions.create(\n        model=model,\n        messages=msgs,\n        max_tokens=max_tokens,\n        temperature=temperature,\n        **kwargs,\n    )"
+  },
+  {
+    "query": "Find the RepoQA benchmark task — specifically the BLEU scoring function.",
+    "file": "tasks/repoqa.py",
+    "symbol": "_compute_bleu",
+    "code": "def _compute_bleu(reference: str, candidate: str) -> float:\n    try:\n        from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction\n        return sentence_bleu([reference.split()], candidate.split(),\n                             smoothing_function=SmoothingFunction().method1)\n    except Exception:\n        return 0.0"
+  },
+  {
+    "query": "Find the main entry point in bench_one.py that parses arguments and dispatches to benchmark tasks.",
+    "file": "bench_one.py",
+    "symbol": "main",
+    "code": "def main() -> int:\n    ap = argparse.ArgumentParser()\n    ap.add_argument(\"--benchmark\", required=True, choices=TASKS.keys())\n    ap.add_argument(\"--model\", default=\"auto\")\n    ap.add_argument(\"--base-url\", default=os.environ.get(\"LLAMA_BASE_URL\", \"http://localhost:8080/v1\"))\n    ap.add_argument(\"--n-samples\", type=int, default=None)\n    ap.add_argument(\"--max-tokens\", type=int, default=None)\n    ap.add_argument(\"--seed\", type=int, default=42)\n    ap.add_argument(\"--think-off\", action=\"store_true\")\n    ap.add_argument(\"--no-think\", action=\"store_true\")\n    ap.add_argument(\"--out\", required=True)\n    args = ap.parse_args()"
+  },
+  {
+    "query": "Find the run-gauntlet.sh script's model preset loop — where it iterates over PRESETS and BENCHMARKS arrays.",
+    "file": "run-gauntlet.sh",
+    "symbol": "main loop",
+    "code": "PRESETS=(qwen4 thinkingcap)\nBENCHMARKS=(ifeval humaneval repoqa)\n\nfor preset in \"${PRESETS[@]}\"; do\n    case \"$preset\" in\n        ornith) USE_FROGGERIC=0 ;;\n        *)       USE_FROGGERIC=1 ;;\n    esac\n    ( cd \"$LLAMA_DIR\" && BENCH=1 MODEL_PRESET=\"$preset\" USE_FROGGERIC_CHAT_TEMPLATE=$USE_FROGGERIC ./serve-up.sh )"
+  },
+  {
+    "query": "Find the smoke test script that runs a quick 3-prompt IFEval sanity check.",
+    "file": "smoke.py",
+    "symbol": "main",
+    "code": "def main():\n    client = make_client()\n    model = list_models(client)[0]\n    prompts = [\n        \"Write a haiku about programming. Do not use the word 'code'.\",\n        \"What is 2+2? Answer with just the number.\",\n        \"Write 'hello' in all caps.\",\n    ]\n    for i, prompt in enumerate(prompts):\n        resp = chat(client, model, [{\"role\": \"user\", \"content\": prompt}], max_tokens=100, temperature=0.0)\n        print(f\"[{i+1}] {resp.choices[0].message.content[:200]}\")"
+  },
+  {
+    "query": "Find the function in bench_client.py that lists available models from the server.",
+    "file": "bench_client.py",
+    "symbol": "list_models",
+    "code": "def list_models(client: OpenAI) -> list[str]:\n    return [m.id for m in client.models.list().data]"
+  }
+]
