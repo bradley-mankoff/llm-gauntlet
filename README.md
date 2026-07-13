@@ -54,6 +54,16 @@ Given a codebase and a natural-language query, can the model find the right file
 **Queries**: 30 auto-generated from function docstrings across 30 files  
 **Grading**: exact file name match (primary), BLEU on extracted code (secondary)
 
+
+### Embedder/Reranker Ablation (Qwythos 9B scout, 30 queries)
+
+| embedder | reranker | file match | notes |
+|---|---|---|---|
+| Qwen3-Embedding-0.6B | BGE-Reranker-v2-m3 | **86.7%** | optimal |
+| Qwen3-Embedding-0.6B | none | 80.0% | reranker adds +7 pts |
+| jina-code-embeddings-1.5b | BGE-Reranker-v2-m3 | 73.3% | code embedder regresses |
+| jina-code-embeddings-1.5b | CoREB-code-reranker (4B) | 70.0% | yes/no < cross-encoder |
+
 ### Scout Results
 
 | scout model | engine | file match | avg time | cost/30q |
@@ -65,17 +75,16 @@ Given a codebase and a natural-language query, can the model find the right file
 | DeepSeek v4 Flash (xhigh) | cloud | 13.3% | 18s | ~$0.05 |
 | MiniCPM5-1B (any mode) | llama.cpp | ~10% | — | $0 |
 
-*Cloud costs estimated at DeepSeek API rates (July 2026): Pro $0.435/$0.87 per 1M tok in/out; Flash $0.14/$0.28. xhigh thinking on Pro/Flash caused models to consume all output tokens with internal reasoning — format compliance dropped to near zero. MiniCPM5 cannot handle large codebase-scale context.*
+*All local models use Qwen3-Embedding-0.6B + BGE-Reranker-v2-m3. jina-code-embeddings and CoREB tested as upgrades but regressed. The boring stack wins.*
 
 ### Scout Key Findings
 
-1. **Local models crush cloud on private codebase retrieval** — the 27B (90%) and Qwythos 9B (87%) both beat DeepSeek v4 Pro (73%). Cloud models hallucinate paths or ignore provided context.
-2. **Qwythos 9B is the speed/accuracy sweet spot** — 86.7% file match at 40s/query, 3.5× faster than the 27B with only 3.3 points less accuracy.
-3. **Thinking hurts scout accuracy** — adds latency with no accuracy gain. Causes DeepSeek to consume all output tokens with internal reasoning.
-4. **Prompt engineering is critical for cloud models** — DeepSeek went from 33% (verbose format + xhigh) to 73% (simple "which file?" + low reasoning).
-5. **Small models beat giants on narrow tasks** — Qwythos 9B outperforms DeepSeek v4 Pro at zero cost. Fine-tuned SLMs dominate domain-specific context-adherence (NVIDIA 2025, Forbes July 2026).
-6. **The embedder matters less than the scout LLM** — the Qwen3-0.6B + BGE-v2-m3 stack is SOTA. The bottleneck is the scout LLM's ability to read provided context and follow instructions.
-
+1. **Local models crush cloud on private codebase retrieval** — 27B (90%) and Qwythos (87%) beat DeepSeek v4 Pro (73%).
+2. **Qwythos 9B is the speed/accuracy sweet spot** — 86.7% at 40s/query, 3.5× faster than 27B.
+3. **The BGE reranker is worth +7 points** over no reranker (86.7% vs 80.0%).
+4. **Code-specific "SOTA" models regress** — jina-code-embeddings costs 13 points vs Qwen3-Embedding. CoREB's yes/no scoring underperforms BGE's cross-encoder.
+5. **The boring stack wins** — Qwen3-Embedding-0.6B + BGE-Reranker-v2-m3 is the optimal embedder/reranker combination for this task.
+6. **CoREB 4B on MPS is viable but slower** — works at ~1s/pair with `torch.mps.empty_cache()`, but sequential yes/no scoring (10 passes per query) is inherently slower than BGE's batched cross-encoder.
 ---
 
 ## Models Tested
