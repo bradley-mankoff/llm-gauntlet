@@ -51,6 +51,7 @@ def _running_summary(
     wall: float,
     n_target: int,
     status: str,
+    file_only: bool = False,
 ) -> dict:
     n = len(results)
     file_matches = sum(1 for r in results if r.get("file_ok"))
@@ -69,6 +70,7 @@ def _running_summary(
         "wall_time_sec": wall,
         "base_url": base_url,
         "status": status,
+        "file_only": file_only,
     }
 
 
@@ -140,6 +142,8 @@ def main() -> int:
                     help="Append /no_think to user messages (Qwen soft switch, template-agnostic)")
     ap.add_argument("--no-graphify", action="store_true",
                     help="Skip graphify pre-check, use embedder+reranker only")
+    ap.add_argument("--file-only", action="store_true",
+                    help="Score file match only (no code/BLEU); shorter prompt and max_tokens")
     ap.add_argument("--resume", action="store_true",
                     help="Resume from --out if it already contains partial results")
     ap.add_argument("--sleep", type=float, default=10.0,
@@ -171,7 +175,7 @@ def main() -> int:
         return 2
 
     print(f"[pipeline] {len(queries)} queries, scout={args.model}, top_n={args.top_n}, "
-          f"graphify={not args.no_graphify}, sleep={args.sleep}s")
+          f"graphify={not args.no_graphify}, file_only={args.file_only}, sleep={args.sleep}s")
 
     pipeline = ScoutPipeline(args.repo)
     file_matches = sum(1 for r in results if r.get("file_ok"))
@@ -187,18 +191,23 @@ def main() -> int:
         try:
             chunks = pipeline.retrieve(
                 q["query"],
-                top_k=10,
+                top_k=20 if args.file_only else 10,
                 rerank_top_n=args.top_n,
                 use_graphify=not args.no_graphify,
             )
-            prompt = pipeline.build_scout_prompt(q["query"], chunks)
+            if args.file_only:
+                prompt = pipeline.build_file_only_prompt(q["query"], chunks)
+                max_toks = min(args.max_tokens, 64)
+            else:
+                prompt = pipeline.build_scout_prompt(q["query"], chunks)
+                max_toks = args.max_tokens
 
             t0 = time.time()
             resp = _chat_with_retries(
                 client,
                 args.model,
                 [{"role": "user", "content": prompt}],
-                max_tokens=args.max_tokens,
+                max_tokens=max_toks,
                 temperature=0.0,
                 think_off=args.think_off,
                 no_think=args.no_think,
@@ -220,24 +229,38 @@ def main() -> int:
                     seen.add(f)
                     candidate_files.append(f)
             file_ref = _parse_file_ref(response_text, candidates=candidate_files)
-            extracted = _extract_code_block(response_text)
 
             gt_file = q["file"]
-            gt_code = q.get("code", "")
-            file_ok = file_ref is not None and Path(file_ref).name == Path(gt_file).name
-
-            try:
-                from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
-
-                bleu = sentence_bleu(
-                    [gt_code.split()],
-                    extracted.split(),
-                    smoothing_function=SmoothingFunction().method1,
+            # Accept exact rel path or basename match (multi-lang repos).
+            file_ok = False
+            if file_ref is not None:
+                fr = Path(file_ref)
+                gt = Path(gt_file)
+                file_ok = (
+                    fr.name == gt.name
+                    or str(fr).replace("\\","/") == str(gt).replace("\\","/")
+                    or str(fr).replace("\\","/").endswith("/" + str(gt).replace("\\","/"))
+                    or str(gt).replace("\\","/").endswith("/" + str(fr).replace("\\","/"))
                 )
-            except Exception:
-                bleu = 1.0 if extracted.strip() == gt_code.strip() else 0.0
 
-            code_ok = bleu >= 0.8
+            if args.file_only:
+                extracted = ""
+                bleu = 0.0
+                code_ok = False
+            else:
+                extracted = _extract_code_block(response_text)
+                gt_code = q.get("code", "")
+                try:
+                    from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+
+                    bleu = sentence_bleu(
+                        [gt_code.split()],
+                        extracted.split(),
+                        smoothing_function=SmoothingFunction().method1,
+                    )
+                except Exception:
+                    bleu = 1.0 if extracted.strip() == gt_code.strip() else 0.0
+                code_ok = bleu >= 0.8
             if file_ok:
                 file_matches += 1
             if code_ok:
@@ -285,6 +308,7 @@ def main() -> int:
             wall=wall,
             n_target=len(queries),
             status=status,
+            file_only=args.file_only,
         )
         # Always checkpoint after each query so a later crash keeps prior work.
         _write_output(out_path, summary, results)
@@ -293,10 +317,16 @@ def main() -> int:
         fm = file_matches / done if done else 0.0
         cm = code_matches / done if done else 0.0
         last = results[-1]
-        print(
-            f"  [{done}/{len(queries)}] file={fm:.1%} code={cm:.1%} "
-            f"({last.get('elapsed', 0):.0f}s) -> {out_path}"
-        )
+        if args.file_only:
+            print(
+                f"  [{done}/{len(queries)}] file={fm:.1%} "
+                f"({last.get('elapsed', 0):.0f}s) ref={last.get('file_ref')} ok={last.get('file_ok')} -> {out_path}"
+            )
+        else:
+            print(
+                f"  [{done}/{len(queries)}] file={fm:.1%} code={cm:.1%} "
+                f"({last.get('elapsed', 0):.0f}s) -> {out_path}"
+            )
 
         if fatal:
             print(f"\n[pipeline] stopped early after checkpointing {done} results")
@@ -318,6 +348,7 @@ def main() -> int:
         wall=wall,
         n_target=len(queries),
         status="complete",
+        file_only=args.file_only,
     )
     _write_output(out_path, summary, results)
     print(f"\n[pipeline] done in {wall}s")

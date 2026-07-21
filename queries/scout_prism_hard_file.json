@@ -1,0 +1,322 @@
+[
+  {
+    "query": "Find the code that TODO: maybe convert enum llama_example to string",
+    "file": "common/arg.cpp",
+    "symbol": "common_params_print_completion",
+    "lang": "cpp",
+    "start_line": 720,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that mark this string as input if other has ALL parts as input",
+    "file": "common/jinja/string.cpp",
+    "symbol": "append",
+    "lang": "cpp",
+    "start_line": 105,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Include assistant prefilled msg in output Enable debug output for PEG parser",
+    "file": "common/chat.h",
+    "symbol": "common_chat_parser_params",
+    "lang": "h",
+    "start_line": 239,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that jinja.palletsprojects.com/en/3.0.x/templates/#for Identifier | TupleLiteral if no iteration took place",
+    "file": "common/jinja/runtime.h",
+    "symbol": "for_statement",
+    "lang": "h",
+    "start_line": 183,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Fallback to the tool call id",
+    "file": "common/chat.cpp",
+    "symbol": "build",
+    "lang": "cpp",
+    "start_line": 2095,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that convenience function for testing only finalize and get the hash value note: after calling , the hasher state is modified, do not call update() again",
+    "file": "common/jinja/utils.h",
+    "symbol": "digest",
+    "lang": "h",
+    "start_line": 118,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Type Checking Utilities Allow null for optional fields",
+    "file": "common/jinja/runtime.h",
+    "symbol": "chk_type",
+    "lang": "h",
+    "start_line": 130,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that for displaying source code around error position",
+    "file": "common/jinja/utils.h",
+    "symbol": "peak_source",
+    "lang": "h",
+    "start_line": 29,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that position in source, for debugging must be overridden by derived classes",
+    "file": "common/jinja/runtime.h",
+    "symbol": "execute_impl",
+    "lang": "h",
+    "start_line": 111,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Not enough set bits, may experience performance issues.",
+    "file": "common/common.cpp",
+    "symbol": "parse_cpu_range",
+    "lang": "cpp",
+    "start_line": 290,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that () + - ~ * / % < > <= >= == != ! - + {# ... #}",
+    "file": "common/jinja/lexer.h",
+    "symbol": "type_to_string",
+    "lang": "h",
+    "start_line": 48,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Helper to check type without asserting (useful for logic)",
+    "file": "common/jinja/parser.cpp",
+    "symbol": "is_type",
+    "lang": "cpp",
+    "start_line": 17,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that base chars [A-Za-z0-9_] are always valid special chars [/.-] must be surrounded by base chars exactly one '/' required",
+    "file": "common/hf-cache.cpp",
+    "symbol": "is_valid_repo_id",
+    "lang": "cpp",
+    "start_line": 121,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that for other exceptions, we exit with status code 1",
+    "file": "common/arg.cpp",
+    "symbol": "list_builtin_chat_templates",
+    "lang": "cpp",
+    "start_line": 972,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that For schema-declared string types Low-level tag methods (from former common_chat_peg_base_builder)",
+    "file": "common/chat-peg-parser.h",
+    "symbol": "reasoning",
+    "lang": "h",
+    "start_line": 69,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Low-level tag methods (from former common_chat_peg_base_builder)",
+    "file": "common/chat-peg-parser.h",
+    "symbol": "content",
+    "lang": "h",
+    "start_line": 71,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that If not found, return empty string Return everything before the common prefix Returns the suffix of `full` after the last occurrence of the common suffix of `lef",
+    "file": "common/chat-auto-parser-helpers.cpp",
+    "symbol": "after_common_suffix",
+    "lang": "cpp",
+    "start_line": 237,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that always relax whitespace requirements on ending markers since they don't influence content",
+    "file": "common/chat-diff-analyzer.cpp",
+    "symbol": "analyze_json_native_parallel_calls",
+    "lang": "cpp",
+    "start_line": 849,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that replacement character for invalid input",
+    "file": "common/console.cpp",
+    "symbol": "append_utf8",
+    "lang": "cpp",
+    "start_line": 410,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Only converts outer string delimiters, properly handling escape sequences: - {'key': 'value'} -> {\"key\": \"value\"} - {'code': 'print(\\'hello\\')'} -> {\"code\": \"pr",
+    "file": "common/chat-peg-parser.cpp",
+    "symbol": "normalize_quotes_to_json",
+    "lang": "cpp",
+    "start_line": 83,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Grammar variant struct with type and grammar string Default constructor - no grammar Constructor with type and grammar string",
+    "file": "common/common.h",
+    "symbol": "common_grammar",
+    "lang": "h",
+    "start_line": 191,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Run differential analysis to extract template structure",
+    "file": "common/chat-auto-parser-generator.cpp",
+    "symbol": "generate_parser",
+    "lang": "cpp",
+    "start_line": 40,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that prints below this log level go to debug log",
+    "file": "common/fit.cpp",
+    "symbol": "llama_log_set",
+    "lang": "cpp",
+    "start_line": 48,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that e.g., \"<think>\", \"[THINK]\", \"<|START_THINKING|>\", \"\" e.g., \"</think>\", \"[BEGIN FINAL RESPONSE]\", \"<|END_THINKING|>\"",
+    "file": "common/chat-auto-parser.h",
+    "symbol": "analyze_reasoning",
+    "lang": "h",
+    "start_line": 261,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that // Docker registry functions",
+    "file": "common/download.cpp",
+    "symbol": "common_docker_get_token",
+    "lang": "cpp",
+    "start_line": 860,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that // Batch utils void common_batch_clear(struct llama_batch & batch) {",
+    "file": "common/common.cpp",
+    "symbol": "common_batch_add",
+    "lang": "cpp",
+    "start_line": 1622,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Top-level field Mode 1: function_is_key \u2014 parse {\"function_name\": {...}}",
+    "file": "common/chat-peg-parser.cpp",
+    "symbol": "build_json_tools_function_is_key",
+    "lang": "cpp",
+    "start_line": 591,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that consume '-' in {%- or {{- Consume (and ignore) all whitespace inside Jinja statements or expressions",
+    "file": "common/jinja/lexer.cpp",
+    "symbol": "consume_while",
+    "lang": "cpp",
+    "start_line": 240,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Invalid Unicode code point Helper function to remove the last UTF-8 character from a string",
+    "file": "common/console.cpp",
+    "symbol": "prev_utf8_char_pos",
+    "lang": "cpp",
+    "start_line": 432,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that // function type struct { for error messages",
+    "file": "common/jinja/value.h",
+    "symbol": "func_args",
+    "lang": "h",
+    "start_line": 646,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that @ngxson : disable otherwise it's bloating the API response printf(\"%s\\n\", std::string(\"; messages = \") + messages.dump(2));",
+    "file": "common/chat.cpp",
+    "symbol": "render_message_to_json",
+    "lang": "cpp",
+    "start_line": 418,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Returns a reference to the active argument destination string. Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.",
+    "file": "common/chat-peg-parser.h",
+    "symbol": "common_chat_peg_gemma4_mapper",
+    "lang": "h",
+    "start_line": 36,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that ignore exceptions during capability analysis for debugging only",
+    "file": "common/jinja/caps.cpp",
+    "symbol": "caps_print_stats",
+    "lang": "cpp",
+    "start_line": 56,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that efficiency cores harm lockstep threading hyperthreading isn't useful for linear algebra __x86_64__ && __linux__",
+    "file": "common/common.cpp",
+    "symbol": "common_cpu_get_num_math",
+    "lang": "cpp",
+    "start_line": 189,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that ////////////////////////////////",
+    "file": "common/jinja/value.cpp",
+    "symbol": "from_json",
+    "lang": "cpp",
+    "start_line": 1254,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Returns true when the generation_prompt should be prefilled into the grammar sampler. Only output-format and tool-call grammars need prefill; user-supplied gram",
+    "file": "common/common.h",
+    "symbol": "common_grammar_needs_prefill",
+    "lang": "h",
+    "start_line": 206,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that setup the defaults // Batch utils",
+    "file": "common/common.cpp",
+    "symbol": "common_batch_clear",
+    "lang": "cpp",
+    "start_line": 1618,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Helpers for dynamic casting and type checking",
+    "file": "common/jinja/runtime.h",
+    "symbol": "is_stmt",
+    "lang": "h",
+    "start_line": 33,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that Mode 3: Flat keys with optional ID fields and parameter ordering",
+    "file": "common/chat-peg-parser.cpp",
+    "symbol": "build_json_tools_flat_keys",
+    "lang": "cpp",
+    "start_line": 742,
+    "hardness": "no_name_c_comment"
+  },
+  {
+    "query": "Find the code that keep strings alive and avoid leaking memory by storing them in a static vector",
+    "file": "common/arg.cpp",
+    "symbol": "clean_file_name",
+    "lang": "cpp",
+    "start_line": 280,
+    "hardness": "no_name_c_comment"
+  }
+]

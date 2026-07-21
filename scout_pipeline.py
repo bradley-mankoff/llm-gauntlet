@@ -207,28 +207,67 @@ class ScoutPipeline:
             self._reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
         return self._reranker
 
-    def index(self, glob_pattern: str = "**/*.py", force: bool = False):
+    def index(self, glob_pattern: str | list[str] = "**/*.py", force: bool = False):
         import chromadb
         model = self._get_embedder()
+        patterns = [glob_pattern] if isinstance(glob_pattern, str) else list(glob_pattern)
         chunks = []
-        for f in sorted(self.repo.glob(glob_pattern)):
-            if ".venv" in str(f) or "__pycache__" in str(f):
-                continue
-            try: source = f.read_text()
-            except Exception: continue
-            for chunk in _extract_chunks(source, str(f.relative_to(self.repo))):
-                chunks.append(chunk)
+        seen_files: set[str] = set()
+        for pattern in patterns:
+            for f in sorted(self.repo.glob(pattern)):
+                if not f.is_file():
+                    continue
+                if any(part in {".venv", "__pycache__", ".git", "node_modules", "build", "dist"} or part.startswith(".")
+                       for part in f.parts):
+                    continue
+                # Skip giant generated / third-party trees common in llama.cpp checkouts.
+                if any(part in {"ggml-cuda", "ggml-vulkan", "ggml-sycl", "ggml-hip", "ggml-musa",
+                                "ggml-cann", "vendor", "third_party"} for part in f.parts):
+                    continue
+                key = str(f)
+                if key in seen_files:
+                    continue
+                seen_files.add(key)
+                try:
+                    source = f.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                rel = str(f.relative_to(self.repo))
+                if f.suffix == ".py":
+                    file_chunks = _extract_chunks(source, rel)
+                elif f.suffix in {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh"}:
+                    file_chunks = _extract_c_chunks(source, rel)
+                else:
+                    continue
+                chunks.extend(file_chunks)
+        if not chunks:
+            raise RuntimeError(f"no indexable chunks under {self.repo} for {patterns}")
         texts = [c["text"] for c in chunks]
         embeddings = model.encode(texts, show_progress_bar=True).tolist()
         client = chromadb.PersistentClient(path=str(self.repo / ".scout_index"))
         if force:
-            try: client.delete_collection(self.collection_name)
-            except Exception: pass
-        self._collection = client.get_or_create_collection(name=self.collection_name, metadata={"hnsw:space": "cosine"})
+            try:
+                client.delete_collection(self.collection_name)
+            except Exception:
+                pass
+        self._collection = client.get_or_create_collection(
+            name=self.collection_name, metadata={"hnsw:space": "cosine"}
+        )
         ids = [f"chunk_{i}" for i in range(len(chunks))]
-        metadatas = [{"file": c["file"], "symbol": c["symbol"], "start_line": c["start_line"]} for c in chunks]
-        self._collection.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
-        print(f"[scout] Indexed {len(chunks)} chunks")
+        metadatas = [
+            {"file": c["file"], "symbol": c["symbol"], "start_line": int(c["start_line"])}
+            for c in chunks
+        ]
+        # Chroma has batch limits; add in slices.
+        bs = 5000
+        for i in range(0, len(chunks), bs):
+            self._collection.add(
+                ids=ids[i:i + bs],
+                embeddings=embeddings[i:i + bs],
+                documents=texts[i:i + bs],
+                metadatas=metadatas[i:i + bs],
+            )
+        print(f"[scout] Indexed {len(chunks)} chunks from {len(seen_files)} files -> {self.repo / '.scout_index'}")
 
     def build_scout_prompt(self, query: str, chunks: list[dict], max_chars_per_file: int = 8000) -> str:
         """Build a scout prompt that keeps the model inside the candidate set.
@@ -308,6 +347,59 @@ class ScoutPipeline:
         {query}
         """)
 
+    def build_file_only_prompt(self, query: str, chunks: list[dict], max_chars_per_file: int = 3500) -> str:
+        """Faster scout prompt: choose FILE only, no code extraction."""
+        ordered_files: list[str] = []
+        best_chunk: dict[str, dict] = {}
+        for c in chunks:
+            fname = c["file"]
+            if fname not in best_chunk:
+                ordered_files.append(fname)
+                best_chunk[fname] = c
+
+        candidate_lines = []
+        sections = []
+        for i, fname in enumerate(ordered_files, 1):
+            c = best_chunk[fname]
+            score = c.get("rerank_score")
+            score_s = f"{float(score):.3f}" if score is not None else "n/a"
+            candidate_lines.append(
+                f"{i}. {fname}  (score={score_s}, symbol={c.get('symbol','?')}, via={c.get('source','?')})"
+            )
+            snippet = (c.get("text") or "").strip()
+            window = self._file_window_for_chunk(fname, c, max_chars_per_file)
+            head = f"// symbol preview ({c.get('symbol','?')}):\n{snippet[:900]}\n\n" if snippet else ""
+            sections.append(
+                f"// CANDIDATE {i}/{len(ordered_files)}: {fname}\n"
+                f"// rerank_score={c.get('rerank_score', 'n/a')}\n"
+                f"{head}{window}"
+            )
+
+        candidate_block = "\n".join(candidate_lines) if candidate_lines else "(none)"
+        ctx = "\n\n".join(sections)
+        return textwrap.dedent(f"""\
+        You are a file-level code scout. Pick exactly one best source file for the query.
+
+        Hard rules:
+        1. Output ONLY: FILE: path/to/file
+        2. FILE must be copied EXACTLY from CANDIDATES.
+        3. Prefer the definition site over facades/re-exports/wrappers.
+        4. Prefer higher rerank_score when unsure.
+        5. Prefer a focused module over a large hub file unless the hub is the true definition.
+
+        ## CANDIDATES
+        {candidate_block}
+
+        ## Candidate excerpts
+        {ctx}
+
+        ## Query
+        {query}
+
+        Answer with one line only:
+        FILE: ...
+        """)
+
     def _file_window_for_chunk(self, fname: str, chunk: dict, max_chars: int) -> str:
         """Return a symbol-centered window instead of a giant leading file dump."""
         try:
@@ -351,6 +443,47 @@ def _extract_chunks(source: str, filepath: str) -> list[dict]:
                     if docstring in l or '"""' in l: break
                 preview = "\n".join(sl[:10])
             chunks.append({"file": filepath, "symbol": node.name, "start_line": node.lineno, "text": preview})
+    return chunks
+
+
+def _extract_c_chunks(source: str, filepath: str) -> list[dict]:
+    """Lightweight C/C++ function/struct chunker for file-level retrieval."""
+    chunks: list[dict] = []
+    # function-like definitions with a following brace on same/next lines
+    func_re = re.compile(
+        r"^(?P<prefix>[\w\s:\*\&\<\>~,]+?)\b(?P<name>[A-Za-z_][A-Za-z0-9_]{2,})\s*\((?P<args>[^;]*)\)\s*(?:const\s*)?\{",
+        re.M,
+    )
+    struct_re = re.compile(
+        r"^(?P<kw>struct|class|enum)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]{2,})\b[^{;]*\{",
+        re.M,
+    )
+    skip = {
+        "if", "for", "while", "switch", "return", "sizeof", "catch", "else",
+        "do", "try", "namespace", "using",
+    }
+    for cre in (func_re, struct_re):
+        for m in cre.finditer(source):
+            name = m.group("name")
+            if name in skip:
+                continue
+            start_line = source[: m.start()].count("\n") + 1
+            # preview: signature + a bit of body / prior comment
+            lo = max(0, m.start() - 180)
+            hi = min(len(source), m.start() + 420)
+            preview = source[lo:hi]
+            # compress whitespace a little for embedding quality
+            preview = re.sub(r"[ \t]+", " ", preview)
+            if len(preview) < 40:
+                continue
+            chunks.append(
+                {
+                    "file": filepath,
+                    "symbol": name,
+                    "start_line": start_line,
+                    "text": preview[:1200],
+                }
+            )
     return chunks
 
 
