@@ -10,11 +10,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_client import list_models, make_client  # noqa: E402
-from tasks import codeeditbench, humaneval, ifeval, repoqa  # noqa: E402
+from tasks import codeeditbench, corebench, humaneval, ifeval, repoqa  # noqa: E402
 
 TASKS = {
     "ifeval": ifeval,
     "codeeditbench": codeeditbench,
+    "corebench": corebench,
     "humaneval": humaneval,
     "repoqa": repoqa,
 }
@@ -22,7 +23,7 @@ TASKS = {
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--benchmark", required=True, choices=TASKS.keys())
+    ap.add_argument("--benchmark", required=True, choices=list(TASKS.keys()))
     ap.add_argument("--model", default="auto",
                     help="Model name as served by llama-server, or 'auto' to use the only model on the server")
     ap.add_argument("--base-url", default=os.environ.get("LLAMA_BASE_URL", "http://localhost:8080/v1"))

@@ -6,12 +6,13 @@
 # includes machine-specific Loki log-pushing and fileserver integration).
 # Adapt paths to your setup.
 #
-# Model presets (set MODEL_PRESET):
 #   qwen4        unsloth/Qwen3.6-27B-MTP-GGUF / Qwen3.6-27B-UD-Q4_K_XL.gguf
 #   qwen6        unsloth/Qwen3.6-27B-MTP-GGUF / Qwen3.6-27B-UD-Q6_K_XL.gguf
 #   thinkingcap  bottlecapai/ThinkingCap-Qwen3.6-27B-GGUF / ThinkingCap-Qwen3.6-27B-Q4_K_M.gguf
 #   qwen122b     unsloth/Qwen3.5-122B-A10B-MTP-GGUF / Qwen3.5-122B-A10B-UD-Q2_K_XL.gguf
 #   ornith       skinnyctax/Ornith-1.0-35B-Q6_K-Frankenstein-MTP-GGUF / ornith-1.0-35b-q6_k.gguf
+#   qwythos-v2   empero-ai/Qwythos-9B-v2-GGUF / Qwythos-9B-v2-Q4_K_M.gguf (bundled template, no froggeric)
+#   minicpm5-v2  GnLOLot/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-GGUF / MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-Q8_0.gguf
 #   custom       set MODEL_REPO + MODEL_FILE in the environment
 #
 # Env vars:
@@ -34,18 +35,22 @@
 set -euo pipefail
 
 MODEL_PRESET="${MODEL_PRESET:-qwen4}"
+USE_MTP=1  # default: enable MTP speculative decoding
 case "$MODEL_PRESET" in
   qwen4)
     MODEL_REPO="unsloth/Qwen3.6-27B-MTP-GGUF"
     MODEL_FILE="Qwen3.6-27B-UD-Q4_K_XL.gguf"
+    USE_MTP=0
     ;;
   qwen6)
     MODEL_REPO="unsloth/Qwen3.6-27B-MTP-GGUF"
     MODEL_FILE="Qwen3.6-27B-UD-Q6_K_XL.gguf"
+    USE_MTP=0
     ;;
   thinkingcap)
     MODEL_REPO="bottlecapai/ThinkingCap-Qwen3.6-27B-GGUF"
     MODEL_FILE="ThinkingCap-Qwen3.6-27B-Q4_K_M.gguf"
+    USE_MTP=0
     ;;
   qwen122b)
     MODEL_REPO="unsloth/Qwen3.5-122B-A10B-MTP-GGUF"
@@ -55,12 +60,22 @@ case "$MODEL_PRESET" in
     MODEL_REPO="skinnyctax/Ornith-1.0-35B-Q6_K-Frankenstein-MTP-GGUF"
     MODEL_FILE="ornith-1.0-35b-q6_k.gguf"
     ;;
+  qwythos-v2)
+    MODEL_REPO="empero-ai/Qwythos-9B-v2-GGUF"
+    MODEL_FILE="Qwythos-9B-v2-Q4_K_M.gguf"
+    USE_MTP=0
+    ;;
+  minicpm5-v2)
+    MODEL_REPO="GnLOLot/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-GGUF"
+    MODEL_FILE="MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-Q8_0.gguf"
+    USE_MTP=0
+    ;;
   custom)
     : "${MODEL_REPO:?custom preset requires MODEL_REPO env var}"
     : "${MODEL_FILE:?custom preset requires MODEL_FILE env var}"
     ;;
   *)
-    echo "ERROR: unknown MODEL_PRESET: $MODEL_PRESET (use: qwen4|qwen6|thinkingcap|qwen122b|ornith|custom)" >&2
+    echo "ERROR: unknown MODEL_PRESET: $MODEL_PRESET (use: qwen4|qwen6|thinkingcap|qwen122b|ornith|qwythos-v2|minicpm5-v2|custom)" >&2
     exit 1
     ;;
 esac
@@ -99,7 +114,11 @@ if [ -n "$existing" ]; then
     sleep 2
 fi
 
-echo "[serve] starting llama-server (preset=$MODEL_PRESET, port=$PORT, ctx=$CTX, np=$N_PARALLEL, threads=8)"
+echo "[serve] starting llama-server (preset=$MODEL_PRESET, port=$PORT, ctx=$CTX, np=$N_PARALLEL, threads=8, mtp=$USE_MTP)"
+MTP_ARGS=""
+if [ "$USE_MTP" = "1" ]; then
+    MTP_ARGS="--spec-type draft-mtp"
+fi
 nohup "$LLAMA_BIN" \
     --hf-repo "$MODEL_REPO" \
     --hf-file "$MODEL_FILE" \
@@ -115,7 +134,7 @@ nohup "$LLAMA_BIN" \
     --kv-unified \
     --cache-type-k q8_0 \
     --cache-type-v q8_0 \
-    --spec-type draft-mtp \
+    ${MTP_ARGS:+"$MTP_ARGS"} \
     --mlock \
     $EXTRA_ARGS \
     > /tmp/llama-server.stdout 2>&1 &

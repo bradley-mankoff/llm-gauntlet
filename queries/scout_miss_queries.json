@@ -1,0 +1,30 @@
+[
+  {
+    "query": "Find the code that offer to open the live Dashboard alongside the chosen client.",
+    "file": "ui/onboarding.py",
+    "symbol": "screen_dashboard_companion",
+    "code": "def screen_dashboard_companion(\n    target: str,\n    *,\n    default: bool = False,\n    host: str = \"127.0.0.1\",\n    port: int = 8000,\n) -> bool:\n    \"\"\"Offer to open the live Dashboard alongside the chosen client.\n\n    Returns True iff the user picks \"Yes\". Only call this for targets in\n    ``DASHBOARD_COMPANION_TARGETS`` \u2014 for terminal/cli (no server) and\n    \"dashboard\" (already opens it) the question is non-sensical.\n    \"\"\"\n\n    if target not in DASHBOARD_COMPANION_TARGETS:\n        return False\n    dashboard_url = _surface_url(host, port, path=\"/dashboard\")\n    _step_panel(\n        step=4,\n        total=4,\n        title=\"Also open the Live Dashboard in your browser?\",\n        options=[\n            (\n                \"1\",\n                f\"Yes [opens {dashboard_url} in a second tab]\",\n                \"Live TPS gauge, acceptance, cache, memory, fans, request log. \"\n                \"Updates in real time while your chosen client drives load.\",\n            ),\n            (\n                \"2\",\n                \"No, just the chosen client\",\n                \"Skip the dashboard. You can always run `mtplx dashboard` \"\n                \"later against the running server.\",\n            ),\n        ],\n    )\n    choice = _prompt_choice(\"Select\", [\"1\", \"2\"], default=\"1\" if default else \"2\")\n    return choice == \"1\"",
+    "start_line": 1221
+  },
+  {
+    "query": "Find the code that use profile-matching model contract draft-head metadata, else default.",
+    "file": "commands/public.py",
+    "symbol": "_model_draft_lm_head_spec",
+    "code": "def _model_draft_lm_head_spec(\n    inspection: dict[str, Any],\n    profile: Any,\n) -> dict[str, Any] | None:\n    \"\"\"Use profile-matching model contract draft-head metadata, else default.\"\"\"\n    fallback = _profile_draft_lm_head_spec(profile)\n    try:\n        from mtplx.draft_lm_head import draft_lm_head_spec_from_runtime_contract\n\n        contract = _profile_scoped_model_runtime_contract(inspection, profile)\n        return draft_lm_head_spec_from_runtime_contract(contract, fallback=fallback)\n    except ImportError:\n        return fallback",
+    "start_line": 760
+  },
+  {
+    "query": "Find the code that compatibility wrapper returning only text chunks.",
+    "file": "reasoning_codecs.py",
+    "symbol": "ThinkingContentStreamNormalizer",
+    "code": "class ThinkingContentStreamNormalizer(QwenThinkingContentStreamSplitter):\n    \"\"\"Compatibility wrapper returning only text chunks.\"\"\"\n\n    def start(self) -> list[str]:\n        return [text for _, text in super().start()]\n\n    def feed(self, text: str) -> list[str]:\n        return [chunk for _, chunk in super().feed(text)]\n\n    def finish(self) -> list[str]:\n        return [chunk for _, chunk in super().finish()]",
+    "start_line": 563
+  },
+  {
+    "query": "Find the code that per-request throttle for dashboard progress SSE events.",
+    "file": "server/dashboard_state.py",
+    "symbol": "ProgressEventGate",
+    "code": "class ProgressEventGate:\n    \"\"\"Per-request throttle for dashboard progress SSE events.\n\n    Generation can produce token progress far faster than a native UI should\n    redraw. Progress is published at UI-frame cadence plus early token\n    milestones so AIME can prove question-start TPS without per-token work on\n    the generation path.\n    \"\"\"\n\n    MIN_INTERVAL_S = 0.20\n    MILESTONE_TOKENS = (1, 32, 64, 128, 256)\n    STEADY_MILESTONE_STRIDE = 256\n\n    def __init__(self) -> None:\n        self._last_publish_s: dict[str, float] = {}\n        self._last_publish_tokens: dict[str, int] = {}\n        self._stats: dict[str, ProgressPublishStats] = {}\n        self._lock = threading.Lock()\n\n    def should_publish(\n        self,\n        request_id: str,\n        *,\n        now: float | None = None,\n        completion_tokens: int | None = None,\n    ) -> bool:\n        now_s = time.time() if now is None else float(now)\n        tokens = max(0, int(completion_tokens or 0))\n        with self._lock:\n            last_s = self._last_publish_s.get(request_id)\n            last_tokens = self._last_publish_tokens.get(request_id, 0)\n            if last_s is None:\n                self._last_publish_s[request_id] = now_s\n                self._last_publish_tokens[request_id] = tokens\n                return True\n            if self._crossed_milestone(last_tokens, tokens):\n                self._last_publish_s[request_id] = now_s\n                self._last_publish_tokens[request_id] = tokens\n                return True\n            if now_s - last_s >= self.MIN_INTERVAL_S:\n                self._last_publish_s[request_id] = now_s\n                self._last_publish_tokens[request_id] = max(last_tokens, tokens)\n                return True\n            return False\n\n    def forget(self, request_id: str) -> None:\n        with self._lock:\n            self._last_publish_s.pop(request_id, None)\n            self._last_publish_tokens.pop(request_id, None)\n            self._stats.pop(request_id, None)\n\n    de",
+    "start_line": 481
+  }
+]

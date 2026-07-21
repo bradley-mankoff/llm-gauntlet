@@ -15,3 +15,8 @@ logs/*.log
 
 # Scout pipeline index (ChromaDB)
 .scout_index/
+
+# Local editor / harness noise
+.DS_Store
+.omp/**/*.bak
+.omp/**/*~

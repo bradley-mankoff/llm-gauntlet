@@ -1,4 +1,4 @@
-"""Scout pipeline: jina-code-embeddings -> BGE-Reranker-v2-m3 -> scout LLM."""
+"""Scout pipeline: Qwen3-Embedding-0.6B -> BGE-Reranker-v2-m3 -> scout LLM (with graphify pre-check)."""
 from __future__ import annotations
 
 import ast
@@ -14,6 +14,184 @@ class ScoutPipeline:
         self._embedder = None
         self._reranker = None
         self._collection = None
+        self._graphify_available = None  # tri-state: None=unchecked, True/False
+        self._graphify_graph = None  # cached networkx graph
+        self._graphify_mtime = None
+
+    def _check_graphify(self) -> bool:
+        """Check if graphify has been run on this repo."""
+        if self._graphify_available is None:
+            graph_path = self.repo / "graphify-out" / "graph.json"
+            self._graphify_available = graph_path.exists()
+        return self._graphify_available
+
+    def _load_graphify_graph(self):
+        """Load graphify-out/graph.json once; reload only if mtime changes."""
+        import json
+        import networkx as nx
+        from networkx.readwrite import json_graph
+
+        graph_path = self.repo / "graphify-out" / "graph.json"
+        try:
+            mtime = graph_path.stat().st_mtime
+        except OSError:
+            self._graphify_available = False
+            self._graphify_graph = None
+            return None
+        if self._graphify_graph is not None and self._graphify_mtime == mtime:
+            return self._graphify_graph
+        try:
+            data = json.loads(graph_path.read_text(encoding="utf-8"))
+            G = json_graph.node_link_graph(data, edges="links")
+        except Exception:
+            self._graphify_graph = None
+            return None
+        self._graphify_graph = G
+        self._graphify_mtime = mtime
+        return G
+
+    def retrieve_graphify(self, query: str) -> list[dict] | None:
+        """BFS graph traversal from keyword-matched start nodes.
+
+        Uncapped novel-file merge into the embedder candidate pool, then BGE
+        rerank. This is the booster from the MTPLX 27B 16/16 file-perfect
+        partial run (graphify ON, top_n=3, depth-2 BFS).
+        Returns None if graphify unavailable or no matches found.
+        """
+        if not self._check_graphify():
+            return None
+
+        G = self._load_graphify_graph()
+        if G is None:
+            return None
+
+        # Vocab expansion: extract meaningful tokens from the query
+        terms = set()
+        for word in re.findall(r"[^\W\d_]+", query, re.UNICODE):
+            w = word.lower()
+            if len(w) >= 3:
+                terms.add(w)
+        if not terms:
+            return None
+
+        # Find start nodes by term overlap with node labels
+        scored = []
+        for nid, ndata in G.nodes(data=True):
+            label = ndata.get("label", "").lower()
+            s = sum(1 for t in terms if t in label)
+            if s > 0:
+                scored.append((s, nid))
+        scored.sort(reverse=True)
+
+        if not scored:
+            return None
+
+        # BFS from top start nodes, depth 2 — broad context
+        start_nodes = [nid for _, nid in scored[:5]]
+        subgraph_nodes = set(start_nodes)
+        frontier = set(start_nodes)
+        for _ in range(2):
+            next_frontier = set()
+            for n in frontier:
+                for neighbor in G.neighbors(n):
+                    if neighbor not in subgraph_nodes:
+                        next_frontier.add(neighbor)
+                        subgraph_nodes.add(neighbor)
+            frontier = next_frontier
+
+        # Collect source files from the subgraph, scored by term relevance
+        file_scores: dict[str, int] = {}
+        best_symbol: dict[str, str] = {}
+        for nid in subgraph_nodes:
+            ndata = G.nodes[nid]
+            sf = ndata.get("source_file", "")
+            if not sf:
+                continue
+            label = ndata.get("label", "").lower()
+            s = sum(1 for t in terms if t in label)
+            if sf not in file_scores or s > file_scores[sf]:
+                file_scores[sf] = s
+                best_symbol[sf] = ndata.get("label", sf)
+
+        if not file_scores:
+            return None
+
+        results = []
+        for sf, s in sorted(file_scores.items(), key=lambda x: -x[1]):
+            try:
+                text = (self.repo / sf).read_text()
+            except Exception:
+                text = f"[graphify: {best_symbol.get(sf, sf)}]"
+            results.append({
+                "file": sf,
+                "symbol": best_symbol.get(sf, sf),
+                "text": text[:3000],
+                "score": s,
+                "source": "graphify",
+            })
+
+        return results if results else None
+
+    def retrieve(self, query: str, top_k: int = 10, rerank_top_n: int = 5,
+                 use_graphify: bool = True) -> list[dict]:
+        """Retrieve relevant code chunks.
+
+        Strategy:
+        1. Embedder → chromadb top-k (always)
+        2. Graphify BFS traversal → candidate files (if available)
+        3. Merge both sources, deduplicate by file
+        4. BGE reranker scores all merged candidates
+        5. Return top rerank_top_n by reranker score
+        """
+        import chromadb
+        model = self._get_embedder()
+        reranker = self._get_reranker()
+
+        # 1. Embedder → chromadb
+        instructed = "Instruct: Given a code search query, retrieve relevant code snippets that match the query\nQuery: " + query
+        client = chromadb.PersistentClient(path=str(self.repo / ".scout_index"))
+        self._collection = client.get_collection(self.collection_name)
+        qe = model.encode([instructed], prompt_name="query").tolist()
+        results = self._collection.query(query_embeddings=qe, n_results=top_k)
+
+        chunks: list[dict] = []
+        seen_files: set[str] = set()
+        for i in range(len(results["ids"][0])):
+            f = results["metadatas"][0][i]["file"]
+            if f not in seen_files:
+                seen_files.add(f)
+                chunks.append({
+                    "id": results["ids"][0][i],
+                    "file": f,
+                    "symbol": results["metadatas"][0][i]["symbol"],
+                    "text": results["documents"][0][i],
+                    "distance": results["distances"][0][i] if results["distances"] else None,
+                    "source": "embeddings",
+                })
+
+        # 2. Graphify BFS traversal → merge into candidate set
+        if use_graphify:
+            graphify_results = self.retrieve_graphify(query)
+            if graphify_results:
+                added = 0
+                for gr in graphify_results:
+                    if gr["file"] not in seen_files:
+                        seen_files.add(gr["file"])
+                        chunks.append(gr)
+                        added += 1
+                if added:
+                    print(f"  [scout] graphify +{added} novel files")
+
+        # 3+4. Reranker scores all merged candidates → sort → top-n
+        pairs = [(query, c["text"][:2000]) for c in chunks]
+        scores = reranker.predict(pairs).tolist()
+        if not isinstance(scores, list):
+            scores = [scores]
+        for c, score in zip(chunks, scores):
+            c["rerank_score"] = float(score)
+
+        chunks.sort(key=lambda c: c["rerank_score"], reverse=True)
+        return chunks[:rerank_top_n]
 
     def _get_embedder(self):
         if self._embedder is None:
@@ -51,25 +229,6 @@ class ScoutPipeline:
         metadatas = [{"file": c["file"], "symbol": c["symbol"], "start_line": c["start_line"]} for c in chunks]
         self._collection.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
         print(f"[scout] Indexed {len(chunks)} chunks")
-
-    def retrieve(self, query: str, top_k: int = 10, rerank_top_n: int = 5) -> list[dict]:
-        import chromadb
-        model = self._get_embedder()
-        # Use Qwen3 instruction format
-        instructed = "Instruct: Given a code search query, retrieve relevant code snippets that match the query\nQuery: " + query
-        client = chromadb.PersistentClient(path=str(self.repo / ".scout_index"))
-        self._collection = client.get_collection(self.collection_name)
-        qe = model.encode([instructed], prompt_name="query").tolist()
-        results = self._collection.query(query_embeddings=qe, n_results=top_k)
-        chunks = []
-        for i in range(len(results["ids"][0])):
-            chunks.append({"id": results["ids"][0][i], "file": results["metadatas"][0][i]["file"],
-                           "symbol": results["metadatas"][0][i]["symbol"], "text": results["documents"][0][i],
-                           "distance": results["distances"][0][i] if results["distances"] else None})
-        # SKIP RERANKER: return embedder's top results directly
-        return chunks[:rerank_top_n]
-        chunks.sort(key=lambda c: c["rerank_score"], reverse=True)
-        return chunks[:rerank_top_n]
 
     def build_scout_prompt(self, query: str, chunks: list[dict], max_chars_per_file: int = 15000) -> str:
         file_contents = {}
