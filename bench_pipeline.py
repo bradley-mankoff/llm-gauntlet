@@ -19,6 +19,55 @@ from bench_client import list_models, make_client
 from scout_pipeline import ScoutPipeline, _extract_code_block, _parse_file_ref
 
 
+def _norm_path(p: str) -> str:
+    return str(Path(str(p))).replace("\\", "/").lstrip("./")
+
+
+def _paths_match(a: str | None, b: str | None) -> bool:
+    if not a or not b:
+        return False
+    fa, fb = Path(_norm_path(a)), Path(_norm_path(b))
+    sa, sb = _norm_path(a), _norm_path(b)
+    return (
+        fa.name == fb.name
+        or sa == sb
+        or sa.endswith("/" + sb)
+        or sb.endswith("/" + sa)
+    )
+
+
+def _stem_pair_match(a: str | None, b: str | None) -> bool:
+    """C/C++ header-impl pair: same stem, code-family suffixes."""
+    if not a or not b:
+        return False
+    fa, fb = Path(_norm_path(a)), Path(_norm_path(b))
+    code = {".h", ".hpp", ".hh", ".c", ".cc", ".cpp", ".cxx"}
+    return fa.stem == fb.stem and fa.suffix.lower() in code and fb.suffix.lower() in code
+
+
+def _gold_files_for(q: dict) -> list[str]:
+    gf = q.get("gold_files")
+    if isinstance(gf, list) and gf:
+        return [str(x) for x in gf]
+    return [str(q.get("file") or "")]
+
+
+def _file_hit(ref: str | None, gold_files: list[str], *, stem_pair: bool = False) -> bool:
+    for g in gold_files:
+        if _paths_match(ref, g):
+            return True
+        if stem_pair and _stem_pair_match(ref, g):
+            return True
+    return False
+
+
+def _rank_in_candidates(gold_files: list[str], candidates: list[str], *, stem_pair: bool = False) -> int | None:
+    for i, c in enumerate(candidates):
+        if _file_hit(c, gold_files, stem_pair=stem_pair):
+            return i + 1  # 1-based
+    return None
+
+
 def _load_checkpoint(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -57,6 +106,13 @@ def _running_summary(
     file_matches = sum(1 for r in results if r.get("file_ok"))
     code_matches = sum(1 for r in results if r.get("code_ok"))
     total_bleu = sum(float(r.get("bleu") or 0.0) for r in results)
+
+    def _rate(key: str) -> float:
+        xs = [r.get(key) for r in results if r.get(key) is not None]
+        if not xs:
+            return 0.0
+        return round(sum(1 for x in xs if x) / len(xs), 4)
+
     return {
         "benchmark": "scout_pipeline",
         "model": model,
@@ -64,6 +120,10 @@ def _running_summary(
         "n_target": n_target,
         "top_n": top_n,
         "file_match_rate": round(file_matches / n, 4) if n else 0.0,
+        "file_at_1": _rate("retrieval_hit_at_1"),
+        "file_at_3": _rate("retrieval_hit_at_3"),
+        "file_at_5": _rate("retrieval_hit_at_5"),
+        "file_at_3_stem": _rate("retrieval_hit_at_3_stem"),
         "code_match_rate": round(code_matches / n, 4) if n else 0.0,
         "avg_bleu": round(total_bleu / n, 4) if n else 0.0,
         "avg_scout_time_s": round(total_time / n, 1) if n else 0.0,
@@ -231,17 +291,18 @@ def main() -> int:
             file_ref = _parse_file_ref(response_text, candidates=candidate_files)
 
             gt_file = q["file"]
-            # Accept exact rel path or basename match (multi-lang repos).
-            file_ok = False
-            if file_ref is not None:
-                fr = Path(file_ref)
-                gt = Path(gt_file)
-                file_ok = (
-                    fr.name == gt.name
-                    or str(fr).replace("\\","/") == str(gt).replace("\\","/")
-                    or str(fr).replace("\\","/").endswith("/" + str(gt).replace("\\","/"))
-                    or str(gt).replace("\\","/").endswith("/" + str(fr).replace("\\","/"))
-                )
+            gold_files = _gold_files_for(q)
+            # Committed pick (model FILE:) against gold set.
+            file_ok = _file_hit(file_ref, gold_files, stem_pair=False)
+            file_ok_stem = _file_hit(file_ref, gold_files, stem_pair=True)
+
+            # Retrieval metrics: is gold present among ranked candidates?
+            rank = _rank_in_candidates(gold_files, candidate_files, stem_pair=False)
+            rank_stem = _rank_in_candidates(gold_files, candidate_files, stem_pair=True)
+            retrieval_hit_at_1 = rank is not None and rank <= 1
+            retrieval_hit_at_3 = rank is not None and rank <= 3
+            retrieval_hit_at_5 = rank is not None and rank <= 5
+            retrieval_hit_at_3_stem = rank_stem is not None and rank_stem <= 3
 
             if args.file_only:
                 extracted = ""
@@ -271,8 +332,17 @@ def main() -> int:
                 {
                     "query": q["query"][:100],
                     "gt_file": gt_file,
+                    "gold_files": gold_files,
                     "file_ref": file_ref,
                     "file_ok": file_ok,
+                    "file_ok_stem": file_ok_stem,
+                    "candidates": candidate_files,
+                    "retrieval_rank": rank,
+                    "retrieval_rank_stem": rank_stem,
+                    "retrieval_hit_at_1": retrieval_hit_at_1,
+                    "retrieval_hit_at_3": retrieval_hit_at_3,
+                    "retrieval_hit_at_5": retrieval_hit_at_5,
+                    "retrieval_hit_at_3_stem": retrieval_hit_at_3_stem,
                     "bleu": round(float(bleu), 4),
                     "code_ok": code_ok,
                     "elapsed": round(elapsed, 1),
@@ -318,8 +388,9 @@ def main() -> int:
         cm = code_matches / done if done else 0.0
         last = results[-1]
         if args.file_only:
+            at3 = sum(1 for r in results if r.get("retrieval_hit_at_3")) / done
             print(
-                f"  [{done}/{len(queries)}] file={fm:.1%} "
+                f"  [{done}/{len(queries)}] file@1={fm:.1%} ret@3={at3:.1%} "
                 f"({last.get('elapsed', 0):.0f}s) ref={last.get('file_ref')} ok={last.get('file_ok')} -> {out_path}"
             )
         else:

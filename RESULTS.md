@@ -91,6 +91,20 @@ Queries: 30 auto-generated from function docstrings (MTPLX codebase), or 8 hand-
 
 ---
 
+## Harder file-only eval (prism-llama.cpp)
+
+Hygiene (non-overfit): drop TODO/banner/low-signal queries, skip vendored `deps/`, dual gold for C/C++ header+impl pairs, report **file@1** (model pick) and **retrieval file@3**.
+
+| set | model | file@1 (pick) | retrieval @1 | retrieval @3 | retrieval @5 | s/q |
+|---|---|---:|---:|---:|---:|---:|
+| MTPLX docstring n=30 (gate) | retrieval only + graphify | — | **93.3%** | **96.7%** | **100%** | — |
+| Prism hard dirty n=40 | Fable file-only | 80.0% | 72.5% | 85.0% | 85.0% | 64.5s |
+| **Prism hard cleaned n=40** | **Fable file-only** | **95.0%** | **95.0%** | **95.0%** | **95.0%** | **61s** |
+
+Artifacts: `queries/scout_prism_hard_file.json`, `results/pipeline_fable_prism_hard_clean_fileonly.json`, `results/retrieval_file_at_k_gate.json`.
+
+Both remaining cleaned-prism misses had gold **outside** the top-5 candidates (not model hub-picking). Iterative “next file” over top-3 cannot beat ~95% without retrieval/query gains.
+
 ## Key Findings
 
 ### Scout
