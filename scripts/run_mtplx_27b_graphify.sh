@@ -85,10 +85,10 @@ start_server() {
 
 start_server
 
-RESUME_FLAG=()
+RESUME_ARGS=""
 if [[ -f "$OUT" ]]; then
   # Auto-resume when partial/complete output exists.
-  RESUME_FLAG=(--resume)
+  RESUME_ARGS="--resume"
   echo "[run] found existing $OUT — enabling --resume"
 fi
 
@@ -104,7 +104,7 @@ nohup uv run python bench_pipeline.py \
     --sleep "$SLEEP_S" \
     --retries "$RETRIES" \
     --out "$OUT" \
-    "${RESUME_FLAG[@]}" \
+    $RESUME_ARGS \
     >"$BENCH_LOG" 2>&1 &
 BENCH_PID=$!
 echo "$BENCH_PID" >"${PID_FILE}.bench"
