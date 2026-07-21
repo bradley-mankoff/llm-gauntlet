@@ -230,35 +230,107 @@ class ScoutPipeline:
         self._collection.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
         print(f"[scout] Indexed {len(chunks)} chunks")
 
-    def build_scout_prompt(self, query: str, chunks: list[dict], max_chars_per_file: int = 15000) -> str:
-        file_contents = {}
+    def build_scout_prompt(self, query: str, chunks: list[dict], max_chars_per_file: int = 8000) -> str:
+        """Build a scout prompt that keeps the model inside the candidate set.
+
+        Fable-Fusion analysis: retrieval already ranks the GT file #1 on most
+        file-misses; the model then drifts to hub facades (server/openai.py) or
+        emits paths that were never candidates. Fix:
+        - show an explicit ranked candidate list with rerank scores
+        - require FILE to be copied from that list
+        - prefer definition modules / matching symbols over re-exports
+        - feed symbol-centered windows, not giant hub file dumps
+        """
+        # Preserve retrieval order (already rerank-sorted).
+        ordered_files: list[str] = []
+        best_chunk: dict[str, dict] = {}
         for c in chunks:
             fname = c["file"]
-            if fname not in file_contents:
-                try:
-                    content = (self.repo / fname).read_text()
-                    if len(content) > max_chars_per_file:
-                        start = max(0, c.get("start_line", 1) - 30)
-                        lines = content.split("\n")
-                        window = lines[start:start + 200]
-                        content = f"[lines {start+1}-{start+len(window)}]\n" + "\n".join(window)
-                        if start + 200 < len(lines): content += f"\n[{len(lines) - start - 200} more lines]"
-                except Exception: content = f"[err: {fname}]"
-                file_contents[fname] = content
-        ctx = "\n\n".join(f"// FILE: {f}\n{c}" for f, c in file_contents.items())
+            if fname not in best_chunk:
+                ordered_files.append(fname)
+                best_chunk[fname] = c
+
+        candidate_lines = []
+        for i, fname in enumerate(ordered_files, 1):
+            c = best_chunk[fname]
+            score = c.get("rerank_score")
+            score_s = f"{float(score):.3f}" if score is not None else "n/a"
+            sym = c.get("symbol") or "?"
+            src = c.get("source") or "retr"
+            candidate_lines.append(f"{i}. {fname}  (score={score_s}, symbol={sym}, via={src})")
+        candidate_block = "\n".join(candidate_lines) if candidate_lines else "(none)"
+
+        sections: list[str] = []
+        for i, fname in enumerate(ordered_files, 1):
+            c = best_chunk[fname]
+            content = self._file_window_for_chunk(fname, c, max_chars_per_file)
+            # Lead with the retrieved symbol snippet when present — denser signal
+            # than a raw file dump for definition-vs-facade disambiguation.
+            snippet = (c.get("text") or "").strip()
+            head = ""
+            if snippet:
+                head = f"// retrieved symbol preview ({c.get('symbol', '?')}):\n{snippet[:1500]}\n\n"
+            sections.append(
+                f"// CANDIDATE {i}/{len(ordered_files)}: {fname}\n"
+                f"// rerank_score={c.get('rerank_score', 'n/a')} source={c.get('source', '?')}\n"
+                f"{head}{content}"
+            )
+        ctx = "\n\n".join(sections)
+
         return textwrap.dedent(f"""\
-        You are a code scout. Find the right files and line ranges.
-        Respond: FILE: path/to/file.py
+        You are a code scout. Pick the single best definition site for the query.
+
+        Hard rules:
+        1. FILE must be copied EXACTLY from the CANDIDATES list below. Never invent a path.
+        2. Prefer the module that DEFINES the behavior (class/def body, docstring match),
+           not a facade/re-export/wrapper that merely calls or imports it.
+        3. Prefer higher rerank_score when two candidates are equally plausible.
+        4. Prefer a smaller focused module over a large hub file (e.g. server/openai.py)
+           unless the hub file is truly the only definition.
+        5. If several candidates match, pick the one whose symbol/docstring best matches
+           the query wording.
+
+        Respond in exactly this shape:
+        FILE: path/to/file.py
         SYMBOL: name
         LINES: start-end
         ```language
         code
         ```
-        ## Codebase
+
+        ## CANDIDATES (choose FILE from this list only)
+        {candidate_block}
+
+        ## Candidate code
         {ctx}
+
         ## Query
         {query}
         """)
+
+    def _file_window_for_chunk(self, fname: str, chunk: dict, max_chars: int) -> str:
+        """Return a symbol-centered window instead of a giant leading file dump."""
+        try:
+            raw = (self.repo / fname).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return f"[err: {fname}]"
+
+        lines = raw.splitlines()
+        if not lines:
+            return "[empty]"
+
+        # Center on the retrieved symbol when we know its line.
+        start_line = int(chunk.get("start_line") or 1)
+        # 1-based start_line from indexer; keep a generous definition window.
+        lo = max(0, start_line - 1 - 20)
+        hi = min(len(lines), lo + 220)
+        # If still huge on chars, tighten.
+        window = lines[lo:hi]
+        text = f"[lines {lo + 1}-{lo + len(window)} of {len(lines)}]\n" + "\n".join(window)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n...[truncated]"
+        return text
+
 
 
 def _extract_chunks(source: str, filepath: str) -> list[dict]:
@@ -287,8 +359,32 @@ def _extract_code_block(response: str) -> str:
     return m.group(1).strip() if m else response.strip()
 
 
-def _parse_file_ref(response: str) -> str | None:
+def _parse_file_ref(response: str, candidates: list[str] | None = None) -> str | None:
+    """Extract FILE path; if candidates given, snap to the best candidate match.
+
+    Models sometimes emit a hub path that was only mentioned in prose, or a
+    basename/absolute variant. Prefer an exact/suffix match inside candidates.
+    """
     m = re.search(r"(?:FILE:\s*|in\s+)([\w/\-_.]+\.\w+)", response, re.IGNORECASE)
-    if m: return m.group(1)
-    m = re.search(r"`([\w/\-_.]+\.\w+)`", response)
-    return m.group(1) if m else None
+    raw = m.group(1) if m else None
+    if raw is None:
+        m = re.search(r"`([\w/\-_.]+\.\w+)`", response)
+        raw = m.group(1) if m else None
+    if raw is None:
+        return None
+    if not candidates:
+        return raw
+
+    # Exact match first.
+    if raw in candidates:
+        return raw
+    # Suffix / basename match against candidates (stable order = rerank order).
+    raw_name = Path(raw).name
+    for c in candidates:
+        if c == raw or c.endswith("/" + raw) or raw.endswith("/" + c) or Path(c).name == raw_name:
+            return c
+    # Model invented a non-candidate path: fall back to top-ranked candidate
+    # only if the response clearly failed the hard rule. Safer for file@1
+    # when retrieval is trusted and the model drifted to a hub path.
+    # Do NOT silently remap if nothing matches basename — return raw for metrics.
+    return raw

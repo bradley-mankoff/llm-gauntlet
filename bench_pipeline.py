@@ -133,7 +133,7 @@ def main() -> int:
     ap.add_argument("--n-samples", type=int, default=None)
     ap.add_argument("--max-tokens", type=int, default=1024)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--top-n", type=int, default=3, help="Files to pass to scout LLM")
+    ap.add_argument("--top-n", type=int, default=5, help="Files to pass to scout LLM (5 recovers near-miss siblings like sdpa_2pass_paged)")
     ap.add_argument("--think-off", action="store_true",
                     help="Inject <|think_off|> in user messages (froggeric hard switch)")
     ap.add_argument("--no-think", action="store_true",
@@ -212,7 +212,14 @@ def main() -> int:
             if resp.choices and resp.choices[0].message and resp.choices[0].message.content:
                 response_text = resp.choices[0].message.content
 
-            file_ref = _parse_file_ref(response_text)
+            candidate_files = []
+            seen = set()
+            for c in chunks:
+                f = c.get("file")
+                if f and f not in seen:
+                    seen.add(f)
+                    candidate_files.append(f)
+            file_ref = _parse_file_ref(response_text, candidates=candidate_files)
             extracted = _extract_code_block(response_text)
 
             gt_file = q["file"]
