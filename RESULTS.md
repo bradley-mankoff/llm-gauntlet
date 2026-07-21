@@ -34,7 +34,9 @@ Queries: 30 auto-generated from function docstrings (MTPLX codebase), or 8 hand-
 
 | scout model | engine | file match | s/query | codebase | n |
 |---|---|---|---|---|---|
-| Qwen3.6-27B MLX 4-bit | MTPLX | **90.0%** | 138s | MTPLX | 30 |
+| Qwen3.6-27B MLX 4-bit + graphify | MTPLX | **90.0%** (avg BLEU **0.601**) | 141s | MTPLX | 30 |
+| Qwen3.6-27B MLX 4-bit (no graphify) | MTPLX | **90.0%** (avg BLEU 0.599) | 138s | MTPLX | 30 |
+| Qwythos v2 + graphify | llama.cpp | 73.3% (avg BLEU 0.454) | 53s | MTPLX | 30 |
 | **Qwythos v2 Q4_K_M** | **llama.cpp** | **100%** | **44s** | **gauntlet** | **8** |
 | Qwythos v1 MLX 4-bit | MTPLX | 86.7% | 40s | MTPLX | 30 |
 | ThinkingCap Q4_K_M (think-on) | llama.cpp | 100% | 156s | gauntlet | 5 |
@@ -93,12 +95,13 @@ Queries: 30 auto-generated from function docstrings (MTPLX codebase), or 8 hand-
 
 ### Scout
 1. **Qwythos v2 is the scout winner.** 100% file match (8/8) at 44s/query on the gauntlet codebase. 3.5× faster than ThinkingCap (156s) for the same accuracy. v2 via llama.cpp matches or beats v1 via MTPLX on file retrieval.
-2. **Target recipe = MTPLX 27B + uncapped graphify BFS.** On 2026-07-20 this hit **16/16 file-perfect** (code match oscillating ~50–60%, BLEU≥0.8 not required for the file metric) before the run was cut by a 1h tool timeout / MTPLX death. Settings locked in `scripts/run_mtplx_27b_graphify.sh`: `--profile stable --max-idle-min 0 --reasoning off`, graphify ON (uncapped novel merge), top_n=3, 10s drain sleep, Qwen3-Embedding + BGE reranker, MTPLX package as `--repo`.
-3. **Why it died, and the fix.** Failure mode was *not* a bad query: the client either hit a 3600s outer timeout mid-Q17 or lost the MTPLX process, and `bench_pipeline.py` only wrote JSON at the end so the 16 perfect hits were discarded. Fixed: per-query checkpoint + `--resume`, chat retries with health wait, cached graphify graph, detached runner script. Non-graphify completed baseline remains 90% file (27/30) / 50% code for comparison.
-4. **The BGE reranker is worth +7 points.** 86.7% → 80.0% without it. Boring stack wins: Qwen3-Embedding + BGE-Reranker-v2-m3.
+2. **Target recipe completed: MTPLX 27B + uncapped graphify BFS.** Full n=30: **file 90.0% (27/30), avg BLEU 0.6007**, code@0.8 50%, 141s/query (`results/pipeline_27b_mtplx_graphify.json`). Secondary metric is **avg BLEU**, not the ≥0.8 pass rate. Same recipe earlier partial was 16/16 file-perfect before tool-timeout/server death; checkpointing fixed that.
+3. **Qwythos v2 on the same graphify pipeline (n=30):** file **73.3%**, **avg BLEU 0.454**, code@0.8 40%, 53s/query (`pipeline_qwythos_v2_graphify.json`). Without graphify Qwythos v2 was stronger on file (80.0%) and avg BLEU (0.517) — graphify helps the 27B more than the 9B.
+4. **Next scout candidate:** DavidAU Fable-Fusion 27B NEO-MTP Q4_K_M (~17.2 GB) via llama.cpp `--spec-type draft-mtp` + froggeric think-off, same graphify recipe (`scripts/run_fable_fusion_graphify.sh`).
+5. **The BGE reranker is worth +7 points.** 86.7% → 80.0% without it. Boring stack wins: Qwen3-Embedding + BGE-Reranker-v2-m3.
 
 ### Executor
-5. **27B MTPLX is the HumanEval leader.** 88% ties DeepSeek v4 Flash. Zero cost, on-premises. Without MTP though, the GGUF Q4_K_XL drops to 73% and runs 1.5× slower.
+6. **27B MTPLX is the HumanEval leader.** 88% ties DeepSeek v4 Flash. Zero cost, on-premises. Without MTP though, the GGUF Q4_K_XL drops to 73% and runs 1.5× slower.
 6. **Qwythos v2 regresses on HumanEval.** 55% vs v1's 78%. v2 appears optimized for retrieval/instruction-following over pure code generation. n=20 vs n=50 adds noise.
 7. **MiniCPM5 v2 regresses everywhere.** 20% HumanEval (v1: 58%), 0% scout file match (v1: ~20%). The V2 fine-tune is worse on these benchmarks.
 8. **MTP matters for speed.** Q4 quants of Qwen3.6-27B don't support `--spec-type draft-mtp`. Without MTP, the 27B runs at ~8 t/s instead of ~25 t/s. For practical use, serve 27B via MTPLX with MLX 4-bit.

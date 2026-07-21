@@ -13,6 +13,7 @@
 #   ornith       skinnyctax/Ornith-1.0-35B-Q6_K-Frankenstein-MTP-GGUF / ornith-1.0-35b-q6_k.gguf
 #   qwythos-v2   empero-ai/Qwythos-9B-v2-GGUF / Qwythos-9B-v2-Q4_K_M.gguf (bundled template, no froggeric)
 #   minicpm5-v2  GnLOLot/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-GGUF / MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-Q8_0.gguf
+#   fable-fusion-mtp  DavidAU/...-NEO-MAX-MTP-GGUF / ...-NEO-MTP-Q4_K_M.gguf
 #   custom       set MODEL_REPO + MODEL_FILE in the environment
 #
 # Env vars:
@@ -70,12 +71,18 @@ case "$MODEL_PRESET" in
     MODEL_FILE="MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-Q8_0.gguf"
     USE_MTP=0
     ;;
+  fable-fusion-mtp)
+    # DavidAU Fable-Fusion 27B with native MTP heads (Q4_K_M ~17.2 GB)
+    MODEL_REPO="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF"
+    MODEL_FILE="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-Q4_K_M.gguf"
+    USE_MTP=1
+    ;;
   custom)
     : "${MODEL_REPO:?custom preset requires MODEL_REPO env var}"
     : "${MODEL_FILE:?custom preset requires MODEL_FILE env var}"
     ;;
   *)
-    echo "ERROR: unknown MODEL_PRESET: $MODEL_PRESET (use: qwen4|qwen6|thinkingcap|qwen122b|ornith|qwythos-v2|minicpm5-v2|custom)" >&2
+    echo "ERROR: unknown MODEL_PRESET: $MODEL_PRESET (use: qwen4|qwen6|thinkingcap|qwen122b|ornith|qwythos-v2|minicpm5-v2|fable-fusion-mtp|custom)" >&2
     exit 1
     ;;
 esac
@@ -115,44 +122,56 @@ if [ -n "$existing" ]; then
 fi
 
 echo "[serve] starting llama-server (preset=$MODEL_PRESET, port=$PORT, ctx=$CTX, np=$N_PARALLEL, threads=8, mtp=$USE_MTP)"
-MTP_ARGS=""
+# Build argv as an array so multi-token flags like --spec-type draft-mtp stay split.
+CMD=(
+    "$LLAMA_BIN"
+    --hf-repo "$MODEL_REPO"
+    --hf-file "$MODEL_FILE"
+    --host "$HOST"
+    --port "$PORT"
+    --metrics
+    --slots
+    --log-timestamps
+    -t 8
+    -fa on
+    -c "$CTX"
+    -np "$N_PARALLEL"
+    --kv-unified
+    --cache-type-k q8_0
+    --cache-type-v q8_0
+    --mlock
+)
 if [ "$USE_MTP" = "1" ]; then
-    MTP_ARGS="--spec-type draft-mtp"
+    CMD+=(--spec-type draft-mtp --spec-draft-n-max 2)
 fi
-nohup "$LLAMA_BIN" \
-    --hf-repo "$MODEL_REPO" \
-    --hf-file "$MODEL_FILE" \
-    --host "$HOST" \
-    --port "$PORT" \
-    --metrics \
-    --slots \
-    --log-timestamps \
-    -t 8 \
-    -fa on \
-    -c "$CTX" \
-    -np "$N_PARALLEL" \
-    --kv-unified \
-    --cache-type-k q8_0 \
-    --cache-type-v q8_0 \
-    ${MTP_ARGS:+"$MTP_ARGS"} \
-    --mlock \
-    $EXTRA_ARGS \
-    > /tmp/llama-server.stdout 2>&1 &
+if [ -n "$EXTRA_ARGS" ]; then
+    # shellcheck disable=SC2206
+    CMD+=($EXTRA_ARGS)
+fi
+nohup "${CMD[@]}" > /tmp/llama-server.stdout 2>&1 &
 server_pid=$!
 echo "$server_pid" > /tmp/llama-server.pid
 
-# Wait for /health
-echo "[serve] waiting for /health (timeout 180s)..."
+# Wait for /health (first HF download can take longer than 180s — keep polling).
+echo "[serve] waiting for /health (timeout 900s)..."
 ready=0
-for _ in $(seq 1 180); do
-    if curl -sf "http://$HOST:$PORT/health" > /dev/null 2>&1; then
+for _ in $(seq 1 900); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 \
+        || curl -fsS --max-time 2 "http://$HOST:$PORT/health" >/dev/null 2>&1; then
         ready=1
         break
+    fi
+    # Bail early if the server process already exited.
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+        echo "ERROR: llama-server exited during startup — see /tmp/llama-server.stdout" >&2
+        tail -n 40 /tmp/llama-server.stdout >&2 || true
+        exit 1
     fi
     sleep 1
 done
 if [ "$ready" != "1" ]; then
-    echo "ERROR: llama-server did not become healthy within 180s" >&2
+    echo "ERROR: llama-server did not become healthy within 900s" >&2
+    tail -n 40 /tmp/llama-server.stdout >&2 || true
     exit 1
 fi
 
