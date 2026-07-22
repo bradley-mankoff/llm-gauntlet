@@ -45,6 +45,29 @@ class Capsule:
         return asdict(self)
 
 
+
+class UsageMeter:
+    """Accumulate prompt/completion tokens from judge LLM calls."""
+
+    def __init__(self) -> None:
+        self.prompt_tokens: int = 0
+        self.completion_tokens: int = 0
+        self.calls: int = 0
+
+    def add(self, prompt: int, completion: int) -> None:
+        self.prompt_tokens += int(prompt or 0)
+        self.completion_tokens += int(completion or 0)
+        self.calls += 1
+
+    @property
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "calls": self.calls,
+        }
+
+
 def _norm(p: str) -> str:
     return str(Path(str(p))).replace("\\", "/").lstrip("./")
 
@@ -112,12 +135,26 @@ def file_window(
     return text
 
 
-def build_judge_prompt(query: str, candidate: Candidate, window: str, peek_i: int, peek_n: int) -> str:
+def build_judge_prompt(
+    query: str,
+    candidate: Candidate,
+    window: str,
+    peek_i: int,
+    peek_n: int,
+    feedback: str | None = None,
+) -> str:
+    fb = (feedback or "").strip()
+    feedback_section = ""
+    if fb:
+        feedback_section = (
+            "\n\nOrchestrator feedback from prior attempts (do not ignore):\n"
+            f"{fb}\n"
+        )
     return f"""You are the line-scout judge. You see ONE window of ONE candidate file.
 
 Query:
 {query}
-
+{feedback_section}
 Candidate {peek_i}/{peek_n}: {candidate.file}
 symbol_hint: {candidate.symbol or "?"}
 rerank_score: {candidate.rerank_score if candidate.rerank_score is not None else "n/a"}
@@ -154,6 +191,7 @@ Rules:
 - Do not invent paths.
 - Use MORE instead of ACCEPT if you only see a forward declare, call site, or unrelated sibling.
 """
+
 
 
 _VERDICT_RE = re.compile(r"VERDICT:\s*(ACCEPT|REJECT|MORE)", re.I)
@@ -211,20 +249,29 @@ def _query_keyword_anchors(path: Path, query: str, *, limit: int = 6) -> list[in
         "file", "line", "lines", "block", "implementation", "define", "defined",
     }
     toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]{4,}", query or "")
-    # prefer snake/camel-ish and longer tokens
+    toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", query or "")
     scored: list[tuple[int, str]] = []
     seen: set[str] = set()
     for t in toks:
         tl = t.lower()
-        if tl in stop or tl in seen:
+        if tl in stop or tl in seen or len(tl) < 3:
             continue
         seen.add(tl)
-        score = len(t)
-        if "_" in t or any(c.isupper() for c in t[1:]):
+        score = len(tl)
+        if "_" in tl or any(c.isupper() for c in tl[1:]):
             score += 5
-        scored.append((score, t))
+        scored.append((score, tl))
+    # Add derived variants: first 4 chars (e.g. "initializes" -> "init")
+    extra: list[tuple[int, str]] = []
+    for _, t in scored:
+        if len(t) >= 7:
+            for span in [t[:4], t[1:5], t[-4:]]:
+                if span not in seen and span not in stop:
+                    seen.add(span)
+                    extra.append((4, span))
+    scored.extend(extra)
     scored.sort(reverse=True)
-    keys = [t for _, t in scored[:8]]
+    keys = [t for _, t in scored[:12]]
     if not keys:
         return []
     try:
@@ -259,6 +306,7 @@ def walk_candidates(
     *,
     max_peeks: int = 5,
     max_within_file: int = 3,
+    feedback: str | None = None,
 ) -> Capsule:
     from scout_metrics import find_symbol_lines, parse_line_range, slice_file_lines
 
@@ -285,7 +333,6 @@ def walk_candidates(
                 anchors.append(h)
         if not anchors:
             anchors = [1]
-
         within = 0
         seen_centers: set[int] = set()
         queue = list(anchors[: max(2, min(4, max_within_file))])
@@ -300,7 +347,7 @@ def walk_candidates(
             peeks += 1
 
             window = file_window(repo, cand.file, start_line=center)
-            prompt = build_judge_prompt(query, cand, window, i, n)
+            prompt = build_judge_prompt(query, cand, window, i, n, feedback=feedback)
             raw = judge(prompt)
             last_raw = raw or ""
             parsed = parse_judge(last_raw, cand.file)
@@ -364,6 +411,7 @@ def make_openai_judge(
     think_off: bool = False,
     no_think: bool = False,
     extra_body: dict | None = None,
+    meter: UsageMeter | None = None,
 ) -> JudgeFn:
     from openai import OpenAI
 
@@ -398,6 +446,13 @@ def make_openai_judge(
                 if body:
                     kwargs["extra_body"] = body
                 resp = client.chat.completions.create(**kwargs)
+                if meter is not None:
+                    usage = getattr(resp, "usage", None)
+                    if usage is not None:
+                        meter.add(
+                            getattr(usage, "prompt_tokens", 0) or 0,
+                            getattr(usage, "completion_tokens", 0) or 0,
+                        )
                 if not resp.choices:
                     return ""
                 return message_text(resp.choices[0].message)
@@ -428,6 +483,7 @@ def make_codex_judge(
     timeout: float = 900.0,
     base_url: str = "https://chatgpt.com/backend-api",
     instructions: str = "You are a precise code scout judge. Follow the output format exactly.",
+    meter: UsageMeter | None = None,
 ) -> JudgeFn:
     """Judge via OpenAI Codex ChatGPT backend (SSE Responses API)."""
     import base64
@@ -515,6 +571,29 @@ def make_codex_judge(
                                     final = ev.get("text") or ""
                             elif et == "response.failed":
                                 raise RuntimeError(str(ev)[:500])
+                            elif meter is not None and et == "response.completed":
+                                try:
+                                    resp_obj = ev.get("response") or ev
+                                    usage = (
+                                        resp_obj.get("usage")
+                                        if isinstance(resp_obj, dict)
+                                        else None
+                                    )
+                                    if isinstance(usage, dict):
+                                        prompt_t = (
+                                            usage.get("input_tokens")
+                                            if usage.get("input_tokens") is not None
+                                            else usage.get("prompt_tokens")
+                                        )
+                                        completion_t = (
+                                            usage.get("output_tokens")
+                                            if usage.get("output_tokens") is not None
+                                            else usage.get("completion_tokens")
+                                        )
+                                        if prompt_t is not None or completion_t is not None:
+                                            meter.add(prompt_t or 0, completion_t or 0)
+                                except Exception:
+                                    pass
                     return (final or "".join(texts)).strip()
             except Exception as e:
                 last_err = e
@@ -548,6 +627,7 @@ def run_tiered_scout(
     max_peeks: int = 5,
     use_graphify: bool = False,
     pipeline: ScoutPipeline | None = None,
+    feedback: str | None = None,
 ) -> Capsule:
     cands = list_candidates(
         repo,
@@ -558,7 +638,9 @@ def run_tiered_scout(
     )
     if not cands:
         return Capsule(status="error", query=query, reason="no candidates")
-    return walk_candidates(repo, query, cands, judge, max_peeks=max_peeks)
+    return walk_candidates(
+        repo, query, cands, judge, max_peeks=max_peeks, feedback=feedback
+    )
 
 
 def candidates_json(cands: list[Candidate]) -> str:
