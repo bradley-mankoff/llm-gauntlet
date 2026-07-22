@@ -83,3 +83,22 @@ Retrieval top-5 + Qwythos sequential capsule. Gold code backfilled offline; caps
 | s/q | 18.6s |
 
 Artifact: `results/pipeline_tiered_qwythos_prism_hard_clean.json`.
+
+## Prism tiered rescored (tight gold + region metrics)
+
+| judge | file@1 | code_ok (region) | bleu@0.8 | start_hit | avg IoU | avg BLEU | sym_hit |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| qwythos | 92.5% | 67.5% | 45.0% | 65.0% | 0.536 | 0.554 | 85.0% |
+| laguna | 95.0% | 67.5% | 35.0% | 52.5% | 0.523 | 0.508 | 90.0% |
+| composer | 92.5% | 70.0% | 42.5% | 70.0% | 0.514 | 0.520 | 90.0% |
+| luna_high | 92.5% | 67.5% | 40.0% | 65.0% | 0.499 | 0.497 | 87.5% |
+| luna_max | 95.0% | 67.5% | 35.0% | 52.5% | 0.490 | 0.476 | 90.0% |
+
+code_ok = file_ok and (BLEU>=0.8 or line_IoU>=0.5 or gold_start in pred range).
+Gold blocks tightened to ~40-line definition slices. Capsules re-read from disk via LINES.
+
+### Approach fix (code)
+- Judge may return `MORE` + `CENTER_LINE` for within-file retarget (up to 3 windows/file).
+- Auto anchors: retrieval start + symbol hits + query-keyword hits.
+- Capsule code sliced from source by LINES (not model paste).
+

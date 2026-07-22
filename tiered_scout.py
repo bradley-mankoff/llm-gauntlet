@@ -113,7 +113,7 @@ def file_window(
 
 
 def build_judge_prompt(query: str, candidate: Candidate, window: str, peek_i: int, peek_n: int) -> str:
-    return f"""You are the line-scout judge. You see ONE candidate file at a time.
+    return f"""You are the line-scout judge. You see ONE window of ONE candidate file.
 
 Query:
 {query}
@@ -125,18 +125,22 @@ rerank_score: {candidate.rerank_score if candidate.rerank_score is not None else
 File window:
 {window}
 
-Decide:
-- ACCEPT if this file is the definition site for the query behavior (not a thin wrapper/re-export/hub facade).
-- REJECT if wrong file, wrong layer, or only mentions the behavior.
+Decide one of:
+1) ACCEPT — this window contains the definition site for the query.
+2) MORE — likely the right file, but definition is outside this window (need another region).
+3) REJECT — wrong file / wrong layer / only a mention or facade.
 
 If ACCEPT, output exactly:
 VERDICT: ACCEPT
 FILE: {candidate.file}
 SYMBOL: <name or unknown>
 LINES: <start>-<end>
-```language
-<minimal code excerpt that answers the query>
-```
+REASON: <one short sentence>
+
+If MORE, output exactly:
+VERDICT: MORE
+CENTER_LINE: <line number to center next window on>
+SYMBOL: <symbol to seek if known>
 REASON: <one short sentence>
 
 If REJECT, output exactly:
@@ -144,17 +148,19 @@ VERDICT: REJECT
 REASON: <one short sentence>
 
 Rules:
-- Prefer definition bodies over facades.
-- LINES must refer to the numbered window above.
-- Keep the code excerpt minimal but sufficient.
+- Prefer definition bodies over facades/re-exports.
+- LINES must use the numbered lines in the window.
+- Do NOT paste a large code block; LINES are enough (system re-reads source).
 - Do not invent paths.
+- Use MORE instead of ACCEPT if you only see a forward declare, call site, or unrelated sibling.
 """
 
 
-_VERDICT_RE = re.compile(r"VERDICT:\s*(ACCEPT|REJECT)", re.I)
+_VERDICT_RE = re.compile(r"VERDICT:\s*(ACCEPT|REJECT|MORE)", re.I)
 _LINES_RE = re.compile(r"LINES:\s*(\d+)\s*-\s*(\d+)", re.I)
 _SYMBOL_RE = re.compile(r"SYMBOL:\s*(\S+)", re.I)
 _REASON_RE = re.compile(r"REASON:\s*(.+)", re.I)
+_CENTER_RE = re.compile(r"CENTER_LINE:\s*(\d+)", re.I)
 
 
 def parse_judge(raw: str, fallback_file: str) -> dict[str, Any]:
@@ -163,7 +169,7 @@ def parse_judge(raw: str, fallback_file: str) -> dict[str, Any]:
     verdict = (vm.group(1).upper() if vm else "")
     if not verdict:
         # heuristic: if model emitted FILE+LINES treat as accept
-        if _LINES_RE.search(text) and ( _parse_file_ref(text) or fallback_file):
+        if _LINES_RE.search(text) and (_parse_file_ref(text) or fallback_file):
             verdict = "ACCEPT"
         else:
             verdict = "REJECT"
@@ -174,6 +180,8 @@ def parse_judge(raw: str, fallback_file: str) -> dict[str, Any]:
     symbol = sm.group(1) if sm else None
     rm = _REASON_RE.search(text)
     reason = (rm.group(1).strip() if rm else "")
+    cm = _CENTER_RE.search(text)
+    center_line = int(cm.group(1)) if cm else None
     code = _extract_code_block(text) if verdict == "ACCEPT" else ""
     # if extract_code_block returns whole text, trim when no fences
     if code.strip() == text.strip() and "```" not in text:
@@ -185,11 +193,63 @@ def parse_judge(raw: str, fallback_file: str) -> dict[str, Any]:
         "symbol": symbol,
         "reason": reason,
         "code": code,
+        "center_line": center_line,
     }
 
 
 JudgeFn = Callable[[str], str]
 
+
+def _query_keyword_anchors(path: Path, query: str, *, limit: int = 6) -> list[int]:
+    """Find lines in file matching salient query tokens (helps when retrieval symbol is wrong)."""
+    if not path.is_file():
+        return []
+    stop = {
+        "find", "code", "that", "which", "with", "from", "this", "that", "into", "when",
+        "where", "what", "function", "method", "class", "return", "returns", "using",
+        "after", "before", "about", "should", "would", "could", "their", "there", "have",
+        "file", "line", "lines", "block", "implementation", "define", "defined",
+    }
+    toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]{4,}", query or "")
+    # prefer snake/camel-ish and longer tokens
+    scored: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for t in toks:
+        tl = t.lower()
+        if tl in stop or tl in seen:
+            continue
+        seen.add(tl)
+        score = len(t)
+        if "_" in t or any(c.isupper() for c in t[1:]):
+            score += 5
+        scored.append((score, t))
+    scored.sort(reverse=True)
+    keys = [t for _, t in scored[:8]]
+    if not keys:
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    hits: list[int] = []
+    for i, ln in enumerate(lines, 1):
+        s = ln.strip()
+        if not s or s.startswith(("//", "/*", "*", "#include")):
+            continue
+        for k in keys:
+            if k in ln:
+                hits.append(i)
+                break
+        if len(hits) >= limit * 3:
+            break
+    # diversify by spacing
+    out: list[int] = []
+    for h in hits:
+        if all(abs(h - o) > 40 for o in out):
+            out.append(h)
+        if len(out) >= limit:
+            break
+    return out
 
 def walk_candidates(
     repo: str | Path,
@@ -198,35 +258,92 @@ def walk_candidates(
     judge: JudgeFn,
     *,
     max_peeks: int = 5,
+    max_within_file: int = 3,
 ) -> Capsule:
+    from scout_metrics import find_symbol_lines, parse_line_range, slice_file_lines
+
     t0 = time.time()
     tried: list[str] = []
     last_raw = ""
     peeks = 0
     n = min(len(candidates), max_peeks)
-    for i, cand in enumerate(candidates[:n], 1):
-        peeks += 1
+    repo = Path(repo)
+
         tried.append(cand.file)
-        window = file_window(repo, cand.file, start_line=cand.start_line)
-        prompt = build_judge_prompt(query, cand, window, i, n)
-        raw = judge(prompt)
-        last_raw = raw or ""
-        parsed = parse_judge(last_raw, cand.file)
-        if parsed["verdict"] == "ACCEPT":
-            return Capsule(
-                status="accepted",
-                query=query,
-                file=parsed["file"] or cand.file,
-                symbol=parsed["symbol"] or cand.symbol or None,
-                lines=parsed["lines"],
-                code=parsed["code"] or "",
-                reason=parsed["reason"],
-                tried=tried,
-                candidates=[c.file for c in candidates],
-                peeks=peeks,
-                elapsed_s=round(time.time() - t0, 2),
-                raw_judge=last_raw[:1000],
-            )
+        path = repo / cand.file
+
+        # Build anchor list: retrieval start + symbol hits + query-keyword hits.
+        anchors: list[int] = []
+        if cand.start_line and int(cand.start_line) > 0:
+            anchors.append(int(cand.start_line))
+        for h in find_symbol_lines(path, cand.symbol or "", limit=5):
+            if all(abs(h - a) > 25 for a in anchors):
+                anchors.append(h)
+        for h in _query_keyword_anchors(path, query, limit=4):
+            if all(abs(h - a) > 25 for a in anchors):
+                anchors.append(h)
+        if not anchors:
+            anchors = [1]
+
+        within = 0
+        seen_centers: set[int] = set()
+        # Prefer trying multiple anchors before leaving the file.
+        queue = list(anchors[: max(2, min(4, max_within_file))])
+        seen_centers: set[int] = set()
+        queue = list(anchors[:2])  # start with up to 2 anchors
+
+        while queue and within < max_within_file:
+            center = queue.pop(0)
+            # snap centers into buckets so we don't re-read near-duplicates
+            bucket = int(round(center / 30.0) * 30) or center
+            if bucket in seen_centers:
+                continue
+            seen_centers.add(bucket)
+            within += 1
+            peeks += 1
+
+            window = file_window(repo, cand.file, start_line=center)
+            prompt = build_judge_prompt(query, cand, window, i, n)
+            raw = judge(prompt)
+            last_raw = raw or ""
+            parsed = parse_judge(last_raw, cand.file)
+            verdict = parsed["verdict"]
+
+            if verdict == "MORE":
+                nxt = parsed.get("center_line")
+                if not nxt and parsed.get("symbol"):
+                    hits = find_symbol_lines(path, parsed["symbol"], limit=3)
+                    nxt = hits[0] if hits else None
+                if nxt and within < max_within_file:
+                    queue.append(int(nxt))
+                continue
+
+            if verdict == "ACCEPT":
+                lines = parsed["lines"]
+                rng = parse_line_range(lines)
+                code = ""
+                if rng:
+                    code = slice_file_lines(path, rng[0], rng[1])
+                if not code:
+                    code = parsed.get("code") or ""
+                return Capsule(
+                    status="accepted",
+                    query=query,
+                    file=parsed["file"] or cand.file,
+                    symbol=parsed["symbol"] or cand.symbol or None,
+                    lines=lines,
+                    code=code,
+                    reason=parsed["reason"],
+                    tried=tried,
+                    candidates=[c.file for c in candidates],
+                    peeks=peeks,
+                    elapsed_s=round(time.time() - t0, 2),
+                    raw_judge=last_raw[:1000],
+                )
+
+            # REJECT -> next candidate file
+            break
+
     return Capsule(
         status="exhausted",
         query=query,
@@ -244,11 +361,12 @@ def make_openai_judge(
     base_url: str,
     model: str,
     api_key: str = "sk-noop",
-    max_tokens: int = 700,
+    max_tokens: int = 450,
     temperature: float = 0.0,
-    timeout: float = 180.0,
+    timeout: float = 900.0,
     think_off: bool = False,
     no_think: bool = False,
+    extra_body: dict | None = None,
 ) -> JudgeFn:
     from openai import OpenAI
 
@@ -260,24 +378,168 @@ def make_openai_judge(
             return getattr(message, "content", None) or ""
 
     client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+    body = dict(extra_body or {})
 
     def _judge(prompt: str) -> str:
+        import time as _time
+
         content = prompt
         if think_off and "<|think_off|>" not in content:
             content = f"<|think_off|>\n{content}"
         if no_think and "/no_think" not in content:
             content = content + "\n/no_think"
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        if not resp.choices:
-            return ""
-        return message_text(resp.choices[0].message)
+
+        last_err: Exception | None = None
+        for attempt in range(12):
+            try:
+                kwargs: dict = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": content}],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                if body:
+                    kwargs["extra_body"] = body
+                resp = client.chat.completions.create(**kwargs)
+                if not resp.choices:
+                    return ""
+                return message_text(resp.choices[0].message)
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                status = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+                retryable = status in {408, 409, 429, 500, 502, 503, 504} or any(
+                    s in msg for s in ("rate-limited", "rate limit", "429", "temporar", "overloaded", "timeout")
+                )
+                if not retryable or attempt >= 11:
+                    raise
+                # free-tier upstream limits need long sleeps
+                delay = min(120.0, (2 ** attempt) * 1.5)
+                _time.sleep(delay)
+        if last_err:
+            raise last_err
+        return ""
 
     return _judge
+
+
+def make_codex_judge(
+    *,
+    model: str = "gpt-5.6-luna",
+    api_key: str | None = None,
+    reasoning_effort: str = "high",
+    timeout: float = 900.0,
+    base_url: str = "https://chatgpt.com/backend-api",
+    instructions: str = "You are a precise code scout judge. Follow the output format exactly.",
+) -> JudgeFn:
+    """Judge via OpenAI Codex ChatGPT backend (SSE Responses API)."""
+    import base64
+    import json as _json
+    import time as _time
+    import urllib.error
+    import urllib.request
+
+    token = (api_key or "").strip()
+    if not token:
+        raise ValueError("codex judge needs api_key/token")
+
+    try:
+        payload = _json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
+        account_id = payload["https://api.openai.com/auth"]["chatgpt_account_id"]
+    except Exception as e:
+        raise ValueError(f"codex token missing chatgpt_account_id: {e}") from e
+
+    raw = base_url.rstrip("/")
+    if raw.endswith("/codex/responses"):
+        url = raw
+    elif raw.endswith("/codex"):
+        url = raw + "/responses"
+    else:
+        url = raw + "/codex/responses"
+
+    def _judge(prompt: str) -> str:
+        body = {
+            "model": model,
+            "store": False,
+            "stream": True,
+            "instructions": instructions,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                }
+            ],
+            "text": {"verbosity": "low"},
+            "include": ["reasoning.encrypted_content"],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "reasoning": {"effort": reasoning_effort, "summary": "auto"},
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "OpenAI-Beta": "responses=experimental",
+            "chatgpt-account-id": account_id,
+            "originator": "pi",
+            "User-Agent": "pi (darwin)",
+        }
+        data = _json.dumps(body).encode()
+        last_err: Exception | None = None
+        for attempt in range(10):
+            try:
+                req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    texts: list[str] = []
+                    final = ""
+                    buf = ""
+                    while True:
+                        chunk = resp.read(4096)
+                        if not chunk:
+                            break
+                        buf += chunk.decode("utf-8", "replace")
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            line = line.strip("\r")
+                            if not line.startswith("data: "):
+                                continue
+                            payload_s = line[6:]
+                            if payload_s == "[DONE]":
+                                continue
+                            try:
+                                ev = _json.loads(payload_s)
+                            except Exception:
+                                continue
+                            et = ev.get("type") or ""
+                            if et == "response.output_text.delta":
+                                texts.append(ev.get("delta") or "")
+                            elif et == "response.output_text.done":
+                                if ev.get("text"):
+                                    final = ev.get("text") or ""
+                            elif et == "response.failed":
+                                raise RuntimeError(str(ev)[:500])
+                    return (final or "".join(texts)).strip()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                code = getattr(e, "code", None)
+                if hasattr(e, "read"):
+                    try:
+                        msg = (e.read() or b"").decode("utf-8", "replace").lower() + " " + msg
+                    except Exception:
+                        pass
+                retryable = code in {408, 409, 429, 500, 502, 503, 504} or any(
+                    s in msg for s in ("rate", "429", "temporar", "overloaded", "timeout", "stream")
+                )
+                if not retryable or attempt >= 9:
+                    raise
+                _time.sleep(min(90.0, (2**attempt) * 1.25))
+        if last_err:
+            raise last_err
+        return ""
+
+    return _judge
+
 
 
 def run_tiered_scout(
