@@ -269,10 +269,11 @@ def walk_candidates(
     n = min(len(candidates), max_peeks)
     repo = Path(repo)
 
+    for i, cand in enumerate(candidates[:n], 1):
         tried.append(cand.file)
         path = repo / cand.file
 
-        # Build anchor list: retrieval start + symbol hits + query-keyword hits.
+        # Anchors: retrieval start + symbol hits + query-keyword hits.
         anchors: list[int] = []
         if cand.start_line and int(cand.start_line) > 0:
             anchors.append(int(cand.start_line))
@@ -287,14 +288,10 @@ def walk_candidates(
 
         within = 0
         seen_centers: set[int] = set()
-        # Prefer trying multiple anchors before leaving the file.
         queue = list(anchors[: max(2, min(4, max_within_file))])
-        seen_centers: set[int] = set()
-        queue = list(anchors[:2])  # start with up to 2 anchors
 
         while queue and within < max_within_file:
             center = queue.pop(0)
-            # snap centers into buckets so we don't re-read near-duplicates
             bucket = int(round(center / 30.0) * 30) or center
             if bucket in seen_centers:
                 continue
