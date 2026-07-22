@@ -160,10 +160,12 @@ class ScoutPipeline:
             f = results["metadatas"][0][i]["file"]
             if f not in seen_files:
                 seen_files.add(f)
+                meta = results["metadatas"][0][i] or {}
                 chunks.append({
                     "id": results["ids"][0][i],
                     "file": f,
-                    "symbol": results["metadatas"][0][i]["symbol"],
+                    "symbol": meta.get("symbol", ""),
+                    "start_line": int(meta.get("start_line") or 1),
                     "text": results["documents"][0][i],
                     "distance": results["distances"][0][i] if results["distances"] else None,
                     "source": "embeddings",

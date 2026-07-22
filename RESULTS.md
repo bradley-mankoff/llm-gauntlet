@@ -91,6 +91,15 @@ Queries: 30 auto-generated from function docstrings (MTPLX codebase), or 8 hand-
 
 ---
 
+
+## Tiered scout (OMP capsule path)
+
+Local retrieval top-5 + sequential one-file judge (Qwythos), returns line capsule.
+
+MTPLX n=30 graphify: **file 93.3%**, **code@0.8 73.3%**, **avg BLEU 0.805**, avg peeks 1.0, **22s/q** (`pipeline_tiered_qwythos_mtplx.json`).
+
+Beats single-shot Fable full extract on the same set (90% file / 50% code / 0.60 BLEU).
+
 ## Harder file-only eval (prism-llama.cpp)
 
 Hygiene (non-overfit): drop TODO/banner/low-signal queries, skip vendored `deps/`, dual gold for C/C++ header+impl pairs, report **file@1** (model pick) and **retrieval file@3**.

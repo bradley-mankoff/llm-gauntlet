@@ -51,3 +51,16 @@ Both models hit that ceiling on file@1 here — weaker/faster Qwythos matches Fa
 
 Note: Qwythos needs llama-server `--reasoning off` (otherwise content is empty and FILE: parse fails).
 
+
+## Tiered scout (retrieval top-5 → sequential judge peeks)
+
+Pipeline: embedder+reranker(+graphify) → top-5 files → local Qwythos judge opens **one file window at a time** until ACCEPT with LINES+code.
+
+| setup | file@1 | code@0.8 | avg BLEU | ret@5 | avg peeks | s/q |
+|---|---:|---:|---:|---:|---:|---:|
+| Fable single-shot full extract (graphify) | 90.0% | 50.0% | 0.601 | — | 1 | 141s |
+| **Tiered Qwythos walk (graphify)** | **93.3%** | **73.3%** | **0.805** | **100%** | **1.0** | **22s** |
+
+Artifact: `results/pipeline_tiered_qwythos_mtplx.json`.
+
+OMP agent: `capsule-scout` (Composer) uses `scripts/local_scout_cli.py` for candidates/windows; orchestrator should `task` that agent with `{query, repo}`.
