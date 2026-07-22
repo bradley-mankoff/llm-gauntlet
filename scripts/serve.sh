@@ -37,6 +37,7 @@ set -euo pipefail
 
 MODEL_PRESET="${MODEL_PRESET:-qwen4}"
 USE_MTP=1  # default: enable MTP speculative decoding
+REASONING_MODE=auto
 case "$MODEL_PRESET" in
   qwen4)
     MODEL_REPO="unsloth/Qwen3.6-27B-MTP-GGUF"
@@ -65,6 +66,7 @@ case "$MODEL_PRESET" in
     MODEL_REPO="empero-ai/Qwythos-9B-v2-GGUF"
     MODEL_FILE="Qwythos-9B-v2-Q4_K_M.gguf"
     USE_MTP=0
+    REASONING_MODE=off
     ;;
   minicpm5-v2)
     MODEL_REPO="GnLOLot/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-GGUF"
@@ -143,6 +145,9 @@ CMD=(
 )
 if [ "$USE_MTP" = "1" ]; then
     CMD+=(--spec-type draft-mtp --spec-draft-n-max 2)
+fi
+if [ "${REASONING_MODE}" = "off" ] || [ "${REASONING_MODE}" = "on" ]; then
+    CMD+=(--reasoning "$REASONING_MODE")
 fi
 if [ -n "$EXTRA_ARGS" ]; then
     # shellcheck disable=SC2206

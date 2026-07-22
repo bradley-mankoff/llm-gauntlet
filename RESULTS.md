@@ -100,6 +100,7 @@ Hygiene (non-overfit): drop TODO/banner/low-signal queries, skip vendored `deps/
 | MTPLX docstring n=30 (gate) | retrieval only + graphify | — | **93.3%** | **96.7%** | **100%** | — |
 | Prism hard dirty n=40 | Fable file-only | 80.0% | 72.5% | 85.0% | 85.0% | 64.5s |
 | **Prism hard cleaned n=40** | **Fable file-only** | **95.0%** | **95.0%** | **95.0%** | **95.0%** | **61s** |
+| **Prism hard cleaned n=40** | **Qwythos v2 file-only** | **95.0%** | **95.0%** | **95.0%** | **95.0%** | **18s** |
 
 Artifacts: `queries/scout_prism_hard_file.json`, `results/pipeline_fable_prism_hard_clean_fileonly.json`, `results/retrieval_file_at_k_gate.json`.
 

@@ -71,3 +71,27 @@ def chat(
         temperature=temperature,
         **kwargs,
     )
+
+
+def message_text(message) -> str:
+    """Best-effort assistant text across reasoning-only models.
+
+    Some local templates put the whole reply in ``reasoning_content`` and leave
+    ``content`` empty unless ``--reasoning off`` is set on the server.
+    """
+    content = getattr(message, "content", None) or ""
+    if isinstance(content, str) and content.strip():
+        return content
+    for key in ("reasoning_content", "reasoning", "reasoning_text"):
+        val = getattr(message, key, None)
+        if isinstance(val, str) and val.strip():
+            return val
+    # openai SDK model_extra / dict forms
+    extra = getattr(message, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        for key in ("reasoning_content", "reasoning"):
+            val = extra.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+    return content if isinstance(content, str) else ""
+

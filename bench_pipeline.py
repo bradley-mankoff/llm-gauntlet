@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_client import chat as _bench_chat
-from bench_client import list_models, make_client
+from bench_client import list_models, make_client, message_text
 from scout_pipeline import ScoutPipeline, _extract_code_block, _parse_file_ref
 
 
@@ -278,8 +278,8 @@ def main() -> int:
             total_time += elapsed
 
             response_text = ""
-            if resp.choices and resp.choices[0].message and resp.choices[0].message.content:
-                response_text = resp.choices[0].message.content
+            if resp.choices and resp.choices[0].message:
+                response_text = message_text(resp.choices[0].message)
 
             candidate_files = []
             seen = set()
