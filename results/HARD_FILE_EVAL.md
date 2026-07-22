@@ -64,3 +64,22 @@ Pipeline: embedder+reranker(+graphify) → top-5 files → local Qwythos judge o
 Artifact: `results/pipeline_tiered_qwythos_mtplx.json`.
 
 OMP agent: `capsule-scout` (Composer) uses `scripts/local_scout_cli.py` for candidates/windows; orchestrator should `task` that agent with `{query, repo}`.
+
+
+## Prism hard tiered Qwythos (rescored)
+
+Retrieval top-5 + Qwythos sequential capsule. Gold code backfilled offline; capsules unchanged.
+
+| metric | value |
+|---|---:|
+| file@1 | 92.5% |
+| code@0.8 | 40.0% |
+| code@0.5 | 47.5% |
+| avg BLEU | 0.452 |
+| code@0.8 \| file_ok | 43.2% |
+| avg BLEU \| file_ok | 0.488 |
+| gold start in pred range \| file_ok | 19/37 |
+| avg peeks | 1.07 |
+| s/q | 18.6s |
+
+Artifact: `results/pipeline_tiered_qwythos_prism_hard_clean.json`.

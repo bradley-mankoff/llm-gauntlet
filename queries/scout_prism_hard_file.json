@@ -9,7 +9,9 @@
     "gold_files": [
       "common/unicode.cpp",
       "common/unicode.h"
-    ]
+    ],
+    "code": "// implementation adopted from src/unicode.cpp\n\nsize_t common_utf8_sequence_length(unsigned char first_byte) {\n    const size_t lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };\n    uint8_t highbits = static_cast<uint8_t>(first_byte) >> 4;\n    return lookup[highbits];\n}\n",
+    "code_start_line": 10
   },
   {
     "query": "Find the code that initialization of the speculative decoding system",
@@ -21,7 +23,9 @@
     "gold_files": [
       "common/speculative.cpp",
       "common/speculative.h"
-    ]
+    ],
+    "code": "// initialization of the speculative decoding system\n//\ncommon_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {\n    // Compute the implementations to use based on the config and their order of preference\n    std::vector<common_speculative_config> configs = {}; // list of speculative configs to try\n    {\n        uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);\n\n        bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));\n        bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3\n        bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;\n        bool has_dspark = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)) && params.draft.ctx_dft != nullptr;\n\n        bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));\n        bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));\n        bool has_ngram_map_k   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K));\n        bool has_ngram_map_k4v = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V));\n        bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));\n\n        // when adding a new type - update here the logic above\n        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 10);\n\n        // this list here defines the priority of the speculators\n        // the one with highest priority are listed first\n        if (has_ngram_simple) {\n            // This implementation can guess a lot of tokens without any draft model.\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, params));\n        }\n        if (has_ngram_map_k) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, params));\n        }\n        if (has_ngram_map_k4v) {\n            // This implementation can guess tokens with high acceptance rate but is more expensive.\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, params));\n        }\n        if (has_ngram_mod) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, params));\n        }\n        if (has_ngram_cache) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));\n        }\n        if (has_draft_simple) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, params));\n        }\n        if (has_draft_eagle3) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params));\n        }\n        if (has_mtp) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));\n        }\n        if (has_dspark) {\n            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params));\n        }\n    }\n\n    std::vector<std::unique_ptr<common_speculative_impl>> impls = {};\n\n    for (const common_speculative_config & config : configs) {\n        switch (config.type) {\n            case COMMON_SPECULATIVE_TYPE_NONE:\n                break;\n            case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE: {\n                impls.push_back(std::make_unique<common_speculative_impl_draft_simple>(config.params, n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3: {\n                impls.push_back(std::make_unique<common_speculative_impl_draft_eagle3>(config.params, n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {\n                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK: {\n                impls.push_back(std::make_unique<common_speculative_impl_draft_dspark>(config.params, n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {\n                common_ngram_map ngram_map = get_common_ngram_map(config.type, config.params.ngram_simple);\n\n                uint16_t ngram_size_key   = ngram_map.size_key;\n                uint16_t mgram_size_value = ngram_map.size_value;\n\n                auto config_simple = common_ngram_simple_config {\n                    /* .size_ngram = */ ngram_size_key,\n                    /* .size_mgram = */ mgram_size_value\n                };\n                auto state = std::make_unique<common_speculative_impl_ngram_simple>(\n                    /* .params = */ config.params,\n                    /* .n_seq  = */ n_seq,\n                    /* .state  = */ config_simple\n                );\n                impls.push_back(std::move(state));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {\n                impls.push_back(\n                        std::make_unique<common_speculative_impl_ngram_map_k>(\n                            get_common_ngram_map(config.type, config.params.ngram_map_k), n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {\n                impls.push_back(\n                        std::make_unique<common_speculative_impl_ngram_map_k>(\n                            get_common_ngram_map(config.type, config.params.ngram_map_k4v), n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_NGRAM_MOD: {\n                impls.push_back(\n                        std::make_unique<common_speculative_impl_ngram_mod>(config.params, n_seq));\n                break;\n            }\n            case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {\n                auto state = create_state_ngram_cache(\n                        config, n_seq,\n                        params.ngram_cache.lookup_cache_static,\n                        params.ngram_cache.lookup_cache_dynamic);\n                impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));\n                break;\n            }\n            default:\n                break;\n        }\n    }\n\n    if (impls.empty()) {\n        LOG_WRN(\"%s: no implementations specified for speculative decoding\\n\", __func__);\n        return nullptr;\n    }\n\n    auto * result = new common_speculative {\n        /* .dparams   = */ common_speculative_draft_params_vec(n_seq),\n        /* .impls     = */ std::move(impls),\n        /* .impl_last = */ std::vector<common_speculative_impl *>(n_seq, nullptr)\n    };\n\n    return result;\n}\n",
+    "code_start_line": 2067
   },
   {
     "query": "Find the code that simple CSV parser that handles quoted fields and escaped quotes example: input: value1,\"value, with, commas\",\"value with \"\"escaped\"\" quotes\",value4 output: [value1] [value, with, c",
@@ -33,7 +37,9 @@
     "gold_files": [
       "common/arg.cpp",
       "common/arg.h"
-    ]
+    ],
+    "code": "// Simple CSV parser that handles quoted fields and escaped quotes\n// example:\n//    input:  value1,\"value, with, commas\",\"value with \"\"escaped\"\" quotes\",value4\n//    output: [value1] [value, with, commas] [value with \"escaped\" quotes] [value4]\nstatic std::vector<std::string> parse_csv_row(const std::string& input) {\n    std::vector<std::string> fields;\n    std::string field;\n    bool in_quotes = false;\n\n    for (size_t i = 0; i < input.length(); ++i) {\n        char ch = input[i];\n\n        if (ch == '\"') {\n            if (!in_quotes) {\n                // start of quoted field (only valid if at beginning of field)\n                if (!field.empty()) {\n                    // quote appeared in middle of unquoted field, treat as literal\n                    field += '\"';\n                } else {\n                    in_quotes = true; // start\n                }\n            } else {\n                if (i + 1 < input.length() && input[i + 1] == '\"') {\n                    // escaped quote: \"\"\n                    field += '\"';\n                    ++i; // skip the next quote\n                } else {\n                    in_quotes = false; // end\n                }\n            }\n        } else if (ch == ',') {\n            if (in_quotes) {\n                field += ',';\n            } else {\n                fields.push_back(std::move(field));\n                field.clear();\n            }\n        } else {\n            field += ch;\n        }\n    }\n\n    // Add the last field\n    fields.push_back(std::move(field));\n\n    return fields;\n}\n",
+    "code_start_line": 1001
   },
   {
     "query": "Find the code that returns the prefix of `full` up until the first occurrence of the common prefix of `left` and `right`",
@@ -45,7 +51,9 @@
     "gold_files": [
       "common/chat-auto-parser-helpers.cpp",
       "common/chat-auto-parser-helpers.h"
-    ]
+    ],
+    "code": "// Returns the prefix of `full` up until the first occurrence of the common prefix of `left` and `right`\nstd::string until_common_prefix(const std::string & full, const std::string & left, const std::string & right) {\n    // Find the common prefix of left and right\n    size_t common_prefix_len = 0;\n    size_t min_len           = std::min(left.length(), right.length());\n    while (common_prefix_len < min_len && left[common_prefix_len] == right[common_prefix_len]) {\n        common_prefix_len++;\n    }\n\n    // If there's no common prefix, return empty string\n    if (common_prefix_len == 0) {\n        return \"\";\n    }\n\n    // Find the common prefix in the full string\n    std::string common_prefix = left.substr(0, common_prefix_len);\n    size_t      pos           = full.find(common_prefix);\n\n    // If not found, return empty string\n    if (pos == std::string::npos) {\n        return \"\";\n    }\n\n    // Return everything before the common prefix\n    return full.substr(0, pos);\n}\n",
+    "code_start_line": 210
   },
   {
     "query": "Find the code that creates an this component parser. this component parsers do not create an AST node if the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is intended for situations where partial out",
@@ -57,7 +65,10 @@
     "gold_files": [
       "common/peg-parser.h",
       "common/peg-parser.cpp"
-    ]
+    ],
+    "code": "            } else if (const auto * atomic = std::get_if<common_peg_atomic_parser>(&p)) {\n",
+    "code_start_line": 1632,
+    "code_file": "common/peg-parser.cpp"
   },
   {
     "query": "Find the code that consume (and ignore) all whitespace inside Jinja statements or expressions",
@@ -69,7 +80,9 @@
     "gold_files": [
       "common/jinja/lexer.cpp",
       "common/jinja/lexer.h"
-    ]
+    ],
+    "code": "        // Consume (and ignore) all whitespace inside Jinja statements or expressions\n        consume_while([](char c) { return std::isspace(static_cast<unsigned char>(c)); });\n",
+    "code_start_line": 240
   },
   {
     "query": "Find the code that determines if a JSON schema can resolve to a string type through any path. Some models emit raw string values rather than JSON-encoded strings for string parameters. If any branch",
@@ -81,7 +94,9 @@
     "gold_files": [
       "common/json-schema-to-grammar.cpp",
       "common/json-schema-to-grammar.h"
-    ]
+    ],
+    "code": "// Determines if a JSON schema can resolve to a string type through any path.\n// Some models emit raw string values rather than JSON-encoded strings for string parameters.\n// If any branch of the schema (via oneOf, anyOf, $ref, etc.) permits a string, this returns\n// true, allowing callers to handle the value as a raw string for simplicity.\nbool common_schema_info::resolves_to_string(const nlohmann::ordered_json & schema) {\n    std::unordered_set<std::string> visited_refs;\n\n    std::function<bool(const json &)> check = [&](const json & s) -> bool {\n        if (!s.is_object()) {\n            return false;\n        }\n\n        // Handle $ref\n        if (s.contains(\"$ref\")) {\n            const std::string & ref = s[\"$ref\"];\n            if (visited_refs.find(ref) != visited_refs.end()) {\n                // Circular reference, assume not a string to be safe\n                return false;\n            }\n            visited_refs.insert(ref);\n            auto it = impl_->_refs.find(ref);\n            if (it != impl_->_refs.end()) {\n                return check(it->second);\n            }\n            return false;\n        }\n\n        // Check type field\n        if (s.contains(\"type\")) {\n            const json & schema_type = s[\"type\"];\n            if (schema_type.is_string()) {\n                if (schema_type == \"string\") {\n                    return true;\n                }\n            } else if (schema_type.is_array()) {\n                // Type can be an array like [\"string\", \"null\"]\n                for (const auto & t : schema_type) {\n                    if (t == \"string\") {\n                        return true;\n                    }\n                }\n            }\n        }\n\n        // Check oneOf/anyOf - if any alternative can be a string\n        if (s.contains(\"oneOf\")) {\n            for (const auto & alt : s[\"oneOf\"]) {\n                if (check(alt)) {\n                    return true;\n                }\n            }\n        }\n        if (s.contains(\"anyOf\")) {\n            for (const auto & alt : s[\"anyOf\"]) {\n                if (check(alt)) {\n                    return true;\n                }\n            }\n        }\n\n        // Check allOf - all components must be compatible with string type\n        if (s.contains(\"allOf\")) {\n            bool all_string = true;\n            for (const auto & component : s[\"allOf\"]) {\n                if (!check(component)) {\n                    all_string = false;\n                    break;\n                }\n            }\n            if (all_string) {\n                return true;\n            }\n        }\n\n        // Check const - if the constant value is a string\n        if (s.contains(\"const\")) {\n            if (s[\"const\"].is_string()) {\n                return true;\n            }\n        }\n\n        // Check enum - if any enum value is a string\n        if (s.contains(\"enum\")) {\n            for (const auto & val : s[\"enum\"]) {\n                if (val.is_string()) {\n                    return true;\n                }\n            }\n        }\n\n        // String-specific keywords imply string type\n        if (s.contains(\"pattern\") || s.contains(\"minLength\") || s.contains(\"maxLength\")) {\n            return true;\n        }\n\n        // Check format - many formats imply string\n        if (s.contains(\"format\")) {\n            const std::string & fmt = s[\"format\"];\n            if (fmt == \"date\" || fmt == \"time\" || fmt == \"date-time\" ||\n                fmt == \"uri\" || fmt == \"email\" || fmt == \"hostname\" ||\n                fmt == \"ipv4\" || fmt == \"ipv6\" || fmt == \"uuid\" ||\n                fmt.find(\"uuid\") == 0) {\n                return true;\n            }\n        }\n\n        return false;\n    };\n\n    return check(schema);\n}\n",
+    "code_start_line": 1050
   },
   {
     "query": "Find the code that use for schema-declared string types - won't be treated as potential JSON container",
@@ -93,7 +108,10 @@
     "gold_files": [
       "common/chat-peg-parser.h",
       "common/chat-peg-parser.cpp"
-    ]
+    ],
+    "code": "                    literal(\"\\\"\") + tool_arg_string_value(string_content('\"')) + literal(\"\\\"\"),\n                    literal(\"'\") + tool_arg_string_value(string_content('\\'')) + literal(\"'\")\n                });\n\n                if (is_string_type) {\n",
+    "code_start_line": 544,
+    "code_file": "common/chat-peg-parser.cpp"
   },
   {
     "query": "Find the code that mark this string as input if other has ALL parts as input",
@@ -105,7 +123,9 @@
     "gold_files": [
       "common/jinja/string.cpp",
       "common/jinja/string.h"
-    ]
+    ],
+    "code": "// mark this string as input if other has ALL parts as input\nvoid string::mark_input_based_on(const string & other) {\n    if (other.all_parts_are_input()) {\n        for (auto & part : parts) {\n            part.is_input = true;\n        }\n    }\n}\n",
+    "code_start_line": 98
   },
   {
     "query": "Find the code that typical for M-RoPE cases: 0 - sequential position of the tokens/embeddings in the sequence 1 - y position in the image 2 - x position in the image 3 - other",
@@ -117,7 +137,9 @@
     "gold_files": [
       "src/llama-batch.h",
       "src/llama-batch.cpp"
-    ]
+    ],
+    "code": "    // typical for M-RoPE cases:\n    //   0 - sequential position of the tokens/embeddings in the sequence\n    //   1 - y position in the image\n    //   2 - x position in the image\n    //   3 - other\n    bool is_pos_2d() const {\n        // TODO @ngxson : we may need to check for model arch when more models use >1 positions\n        return n_pos >= 3;\n    }\n",
+    "code_start_line": 25
   },
   {
     "query": "Find the code that matches all characters this component a delimiter is found (delimiter not consumed). S -> (!delim .)*",
@@ -129,7 +151,10 @@
     "gold_files": [
       "common/peg-parser.h",
       "common/peg-parser.cpp"
-    ]
+    ],
+    "code": "    auto sharp_bracket_parser = literal(\"<\") + until(\">\") + literal(\">\");\n    auto square_bracket_parser = literal(\"[\") + until(\"]\") + literal(\"]\");\n    return choice({ sharp_bracket_parser, square_bracket_parser });\n",
+    "code_start_line": 1444,
+    "code_file": "common/peg-parser.cpp"
   },
   {
     "query": "Find the code that constructor with type and grammar string",
@@ -141,7 +166,9 @@
     "gold_files": [
       "common/common.h",
       "common/common.cpp"
-    ]
+    ],
+    "code": "    // Constructor with type and grammar string\n    common_grammar(common_grammar_type t, std::string g) : type(t), grammar(std::move(g)) {\n        GGML_ASSERT(type != COMMON_GRAMMAR_TYPE_NONE || !grammar.empty());\n    }\n",
+    "code_start_line": 191
   },
   {
     "query": "Find the code that returns number of CPUs on system that are useful for math.",
@@ -153,7 +180,9 @@
     "gold_files": [
       "common/common.cpp",
       "common/common.h"
-    ]
+    ],
+    "code": "/**\n * Returns number of CPUs on system that are useful for math.\n */\nint32_t common_cpu_get_num_math() {\n#if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)\n    int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);\n    if (n_cpu < 1) {\n        return common_cpu_get_num_physical_cores();\n    }\n    if (is_hybrid_cpu()) {\n        cpu_set_t affinity;\n        if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {\n            int result = cpu_count_math_cpus(n_cpu);\n            pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);\n            if (result > 0) {\n                return result;\n            }\n        }\n    }\n#endif\n    return common_cpu_get_num_physical_cores();\n}\n",
+    "code_start_line": 189
   },
   {
     "query": "Find the code that mode 3: Flat keys with optional ID fields and parameter ordering",
@@ -165,7 +194,9 @@
     "gold_files": [
       "common/chat-peg-parser.cpp",
       "common/chat-peg-parser.h"
-    ]
+    ],
+    "code": "// Mode 3: Flat keys with optional ID fields and parameter ordering\ncommon_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(\n    const ordered_json &             tools,\n    const std::string &              effective_name_key,\n    const std::string &              effective_args_key,\n    const std::string &              call_id_key,\n    const std::string &              gen_call_id_key,\n    const std::vector<std::string> & parameters_order) {\n\n    auto tool_choices    = choice();\n    auto name_key_parser = literal(\"\\\"\" + effective_name_key + \"\\\"\");\n    auto args_key_parser = literal(\"\\\"\" + effective_args_key + \"\\\"\");\n\n    for (const auto & tool_def : tools) {\n        if (!tool_def.contains(\"function\")) {\n            continue;\n        }\n        const auto &   function = tool_def.at(\"function\");\n        std::string    name     = function.at(\"name\");\n        ordered_json   params   = function.contains(\"parameters\") ? function.at(\"parameters\") : ordered_json::object();\n\n        auto tool_name_ = name_key_parser + space() + literal(\":\") + space() +\n                         atomic(literal(\"\\\"\") + tool_name(literal(name)) + literal(\"\\\"\"));\n        auto tool_args_ = args_key_parser + space() + literal(\":\") + space() +\n                         tool_args(schema(json(), \"tool-\" + name + \"-schema\", params));\n\n        // Build ID parsers if keys are provided\n        common_peg_parser id_parser = eps();\n        if (!call_id_key.empty()) {\n            id_parser = atomic(\n                literal(\"\\\"\" + call_id_key + \"\\\"\") + space() + literal(\":\") + space() +\n                choice({\n                    literal(\"\\\"\") + tool_id(string_content('\"')) + literal(\"\\\"\"),\n                    tool_id(json_number())\n                })\n            );\n        }\n\n        common_peg_parser gen_id_parser = eps();\n        if (!gen_call_id_key.empty()) {\n            gen_id_parser = atomic(\n                literal(\"\\\"\" + gen_call_id_key + \"\\\"\") + space() + literal(\":\") + space() +\n                choice({\n                    literal(\"\\\"\") + tool_id(string_content('\"')) + literal(\"\\\"\"),\n                    tool_id(json_number())\n                })\n            );\n        }\n\n        // Create (parser, key) pairs for all fields, then sort by parameters_order\n        std::vector<std::pair<common_peg_parser, std::string>> parser_pairs;\n        parser_pairs.emplace_back(tool_name_, effective_name_key);\n        parser_pairs.emplace_back(tool_args_, effective_args_key);\n        if (!call_id_key.empty()) {\n            parser_pairs.emplace_back(optional(id_parser), call_id_key);\n        }\n        if (!gen_call_id_key.empty()) {\n            parser_pairs.emplace_back(optional(gen_id_parser), gen_call_id_key);\n        }\n\n        std::sort(parser_pairs.begin(), parser_pairs.end(),\n            [&parameters_order](const auto & a, const auto & b) {\n                auto pos_a = std::find(parameters_order.begin(), parameters_order.end(), a.second);\n                auto pos_b = std::find(parameters_order.begin(), parameters_order.end(), b.second);\n                size_t idx_a = (pos_a == parameters_order.end()) ? parameters_order.size() : std::distance(parameters_order.begin(), pos_a);\n                size_t idx_b = (pos_b == parameters_order.end()) ? parameters_order.size() : std::distance(parameters_order.begin(), pos_b);\n                return idx_a < idx_b;\n            });\n\n        auto ordered_body = tool_open(literal(\"{\")) + space();\n        for (size_t i = 0; i < parser_pairs.size(); i++) {\n            ordered_body = ordered_body + parser_pairs[i].first;\n            if (i < parser_pairs.size() - 1) {\n                ordered_body = ordered_body + space() + literal(\",\") + space();\n            }\n        }\n        ordered_body = ordered_body + space() + tool_close(literal(\"}\"));\n\n        tool_choices |= rule(\"tool-\" + name, tool(ordered_body));\n    }\n\n    return tool_choices;\n}\n",
+    "code_start_line": 742
   },
   {
     "query": "Find the code that src is optional, used for error reporting",
@@ -177,7 +208,10 @@
     "gold_files": [
       "common/jinja/runtime.h",
       "common/jinja/runtime.cpp"
-    ]
+    ],
+    "code": "static value_string exec_statements(const statements & stmts, context & ctx) {\n    auto result = mk_val<value_array>();\n    for (const auto & stmt : stmts) {\n        JJ_DEBUG(\"Executing statement of type %s\", stmt->type().c_str());\n        result->push_back(stmt->execute(ctx));\n    }\n    // convert to string parts\n    value_string str = mk_val<value_string>();\n    gather_string_parts_recursive(result, str);\n    return str;\n}\n",
+    "code_start_line": 21,
+    "code_file": "common/jinja/runtime.cpp"
   },
   {
     "query": "Find the code that n-gram map maximum number of counted values of a ngram map value.",
@@ -189,7 +223,9 @@
     "gold_files": [
       "common/ngram-map.cpp",
       "common/ngram-map.h"
-    ]
+    ],
+    "code": "\nvoid common_ngram_map_begin(\n    common_ngram_map & map, const llama_tokens & tokens) {\n    size_t size_begin = tokens.size();\n\n    LOG_DBG(\"%s: begin, idx_last_draft=%zu, new begin=%zu, #keys=%zu\\n\", __func__,\n            map.idx_last_check, size_begin, map.keys.size());\n\n    size_t count_map_entries_upd = 0;\n    if (!map.key_map.empty() && size_begin < map.idx_last_check) {\n        if (map.show_key_map_stats) {\n            // Print statistics of hash map map_key.\n            size_t count_nonzero = 0;\n            uint32_t min_idx = UINT32_MAX;\n            uint32_t max_idx = 0;\n            for (size_t i = 0; i < map.key_map.size(); ++i) {\n                uint32_t key_idx = map.key_map[i];\n                if (key_idx != 0) {\n                    ++count_nonzero;\n                    if (key_idx < min_idx) min_idx = key_idx;\n                    if (key_idx > max_idx) max_idx = key_idx;\n                }\n            }\n            if (count_nonzero == 0) {\n                min_idx = 0;\n            }\n            LOG_INF(\"%s: key_map stats: entries=%zu, min_idx=%u, max_idx=%u, key_map_last_idx=%u\\n\",\n                    __func__, count_nonzero, min_idx, max_idx, map.key_map_last_idx);\n        }\n\n        // Update the map from hash to key index (clear outdated entries).\n        for (size_t i = 0; i < map.key_map.size(); ++i) {\n            uint32_t key_idx = map.key_map[i];\n            if (key_idx >= map.size_last_begin) {\n                map.key_map[i] = 0;\n                count_map_entries_upd++;\n            }\n        }\n        map.key_map_last_idx = (map.size_last_begin > 0) ? map.size_last_begin - 1 : 0;\n    }\n\n    if (size_begin < map.idx_last_check && !map.keys.empty()) {\n        // The next token generation will start at index size_begin.\n        // The tokens between map.size_last_begin and size_begin are no longer valid.\n        //\n        // Refresh map: Remove all entries with index >= map.size_last_begin.\n        size_t count_keys = map.keys.size();\n        size_t count_keys_del = 0;\n        size_t count_values_del = 0;\n        for (int32_t i = map.keys.size() - 1; i >= 0; --i) {\n            common_ngram_map_key & key = map.keys[i];\n            if (key.key_idx >= map.size_last_begin) {\n                // Delete the key.\n                LOG_DBG(\"%s: delete key %d at index %zu (>= size_last_begin=%zu)\\n\", __func__, i, key.key_idx, map.size_last_begin);\n                map.keys.erase(map.keys.begin() + i);\n                count_keys_del++;\n                continue;\n            }\n            if (map.key_only) {\n                continue;\n            }\n\n            // Check the indices of the values.\n            for (int16_t j = COMMON_NGRAM_MAX_VALUES - 1; j >= 0; --j) {\n                common_ngram_map_value & value = key.values[j];\n                if (value.value_idx >= map.size_last_begin) {\n                    // Delete the value.\n                    count_values_del++;\n\n                    // Move all values after this value to the left.\n                    for (uint16_t k = j; k < COMMON_NGRAM_MAX_VALUES - 1; ++k) {\n                        key.values[k] = key.values[k + 1];\n                    }\n                    // Clear the last value.\n                    key.values[COMMON_NGRAM_MAX_VALUES - 1].value_idx = 0;\n                    key.values[COMMON_NGRAM_MAX_VALUES - 1].value_num = 0;\n                }\n            }\n            if (key.values[0].value_idx == 0) {\n                // No values left, delete the key.\n                LOG_DBG(\"%s: delete key %d at index %zu (no values left)\\n\", __func__, i, key.key_idx);\n                map.keys.erase(map.keys.begin() + i);\n                count_keys_del++;\n            }\n        }\n\n        LOG_INF(\"%s: refresh map: idx_last_draft=%zu, new begin=%zu, #keys_checked=%zu, #keys_del=%zu, #values_del=%zu, #hashes_upd=%zu\\n\", __func__,\n                map.idx_last_check, size_begin,\n                count_keys, count_keys_del, count_values_del, count_map_entries_upd);\n    }\n\n    map.idx_last_check = size_begin;\n    map.size_last_begin = size_begin;\n}\n",
+    "code_start_line": 120
   },
   {
     "query": "Find the code that check if a delimiter starts at the given position",
@@ -201,7 +237,9 @@
     "gold_files": [
       "common/peg-parser.cpp",
       "common/peg-parser.h"
-    ]
+    ],
+    "code": "    // Check if a delimiter starts at the given position\n    match_result check_at(std::string_view sv, size_t start_pos) const {\n        size_t current = 0; // Start at root\n        size_t pos = start_pos;\n\n        // LOG_DBG(\"%s: checking at pos %zu, sv='%s'\\n\", __func__, start_pos, std::string(sv).c_str());\n\n        while (pos < sv.size()) {\n            auto result = common_parse_utf8_codepoint(sv, pos);\n            if (result.status != utf8_parse_result::SUCCESS) {\n                break;\n            }\n\n            auto it = nodes[current].children.find(result.codepoint);\n            if (it == nodes[current].children.end()) {\n                // Can't continue matching\n                return match_result{match_result::NO_MATCH};\n            }\n\n            current = it->second;\n            pos += result.bytes_consumed;\n\n            // Check if we've matched a complete word\n            if (nodes[current].is_word) {\n                return match_result{match_result::COMPLETE_MATCH};\n            }\n        }\n\n        // Reached end of input while still in the trie (not at root)\n        if (current != 0) {\n            // We're in the middle of a potential match\n            return match_result{match_result::PARTIAL_MATCH};\n        }\n\n        // Reached end at root (no match)\n        return match_result{match_result::NO_MATCH};\n    }\n",
+    "code_start_line": 54
   },
   {
     "query": "Find the code that default capacity - will be expanded if needed",
@@ -213,7 +251,10 @@
     "gold_files": [
       "common/log.cpp",
       "common/log.h"
-    ]
+    ],
+    "code": "// the common_log uses an internal worker thread to print/write log messages\n// when the worker thread is paused, incoming log messages are discarded\nstruct common_log;\n\nstruct common_log * common_log_init();\n\n// Singleton, intentionally leaked to avoid Windows teardown hangs.\n// Call common_log_flush() before exit if you want to ensure all logs are flushed.\nstruct common_log * common_log_main();\n\nvoid                common_log_pause (struct common_log * log); // pause  the worker thread, not thread-safe\nvoid                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe\nvoid                common_log_free  (struct common_log * log);\n\nLOG_ATTRIBUTE_FORMAT(3, 4)\nvoid common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...);\n\n// defaults: file = NULL, colors = false, prefix = false, timestamps = false\n//\n// regular log output:\n//\n//   ggml_backend_metal_log_allocated_size: allocated buffer, size =  6695.84 MiB, ( 6695.91 / 21845.34)\n//   llm_load_tensors: ggml ctx size =    0.27 MiB\n//   llm_load_tensors: offloading 32 repeating layers to GPU\n//   llm_load_tensors: offloading non-repeating layers to GPU\n//\n// with prefix = true, timestamps = true, the log output will look like this:\n//\n//   0.00.035.060 D ggml_backend_metal_log_allocated_size: allocated buffer, size =  6695.84 MiB, ( 6695.91 / 21845.34)\n//   0.00.035.064 I llm_load_tensors: ggml ctx size =    0.27 MiB\n//   0.00.090.578 I llm_load_tensors: offloading 32 repeating layers to GPU\n//   0.00.090.579 I llm_load_tensors: offloading non-repeating layers to GPU\n//\n// D - debug   (stderr, V = LOG_DEFAULT_DEBUG)\n// I - info    (stdout, V = LOG_DEFAULT_INFO)\n// W - warning (stderr, V = LOG_DEFAULT_WARN)\n// E - error   (stderr, V = LOG_DEFAULT_ERROR)\n// O - output  (stdout, V = LOG_DEFAULT_OUTPUT)\n//\n\nvoid common_log_set_file      (struct common_log * log, const char * file); // not thread-safe\nvoid common_log_set_colors    (struct common_log * log, log_colors colors); // not thread-safe\nvoid common_log_set_prefix    (struct common_log * log, bool prefix);       // whether to output prefix to each log\nvoid common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix\nvoid common_log_flush         (struct common_log * log);                    // flush all pending log messages\n\n// helper macros for logging\n// use these to avoid computing log arguments if the verbosity of the log is higher than the threshold\n//\n// for example:\n//\n//   LOG_DBG(\"this is a debug message: %d\\n\", expensive_function());\n//\n// this will avoid calling expensive_function() if LOG_DEFAULT_DEBUG > common_log_verbosity_thold\n//\n\n#define LOG_TMPL(level, verbosity, ...) \\\n    do { \\\n        if ((verbosity) <= common_log_get_verbosity_thold()) { \\\n            common_log_add(common_log_main(), (level), __VA_ARGS__); \\\n        } \\\n    } while (0)\n",
+    "code_start_line": 50,
+    "code_file": "common/log.h"
   },
   {
     "query": "Find the code that helper function to get a token from the combined, speculative sequence of inp and draft.",
@@ -225,7 +266,9 @@
     "gold_files": [
       "common/ngram-cache.cpp",
       "common/ngram-cache.h"
-    ]
+    ],
+    "code": "// Helper function to get a token from the combined, speculative sequence of inp and draft.\nstatic llama_token get_token(const std::vector<llama_token> & inp, const std::vector<llama_token> & draft, const size_t i) {\n    return i < inp.size() ? inp[i] : draft[1 + i - inp.size()];\n}\n",
+    "code_start_line": 55
   },
   {
     "query": "Find the code that multi-layer hidden-state tap C API (staging)",
@@ -237,7 +280,9 @@
     "gold_files": [
       "src/llama-context.cpp",
       "src/llama-context.h"
-    ]
+    ],
+    "code": "// multi-layer hidden-state tap C API (staging) -------------------------------\n\nvoid llama_set_capture_layers(llama_context * ctx, const int32_t * layer_ids, size_t n_layers, bool masked) {\n    std::vector<int32_t> ids;\n    ids.reserve(n_layers);\n    for (size_t i = 0; i < n_layers; ++i) {\n        ids.push_back(layer_ids[i]);\n    }\n    ctx->set_capture_layers(ids, masked);\n}\n",
+    "code_start_line": 4028
   },
   {
     "query": "Find the code that returns the suffix of `full` after the last occurrence of the common suffix of `left` and `right`",
@@ -249,7 +294,9 @@
     "gold_files": [
       "common/chat-auto-parser-helpers.cpp",
       "common/chat-auto-parser-helpers.h"
-    ]
+    ],
+    "code": "// Returns the suffix of `full` after the last occurrence of the common suffix of `left` and `right`\nstd::string after_common_suffix(const std::string & full, const std::string & left, const std::string & right) {\n    // Find the common suffix of left and right (compare from the end)\n    size_t common_suffix_len = 0;\n    size_t min_len           = std::min(left.length(), right.length());\n    while (common_suffix_len < min_len &&\n           left[left.length() - 1 - common_suffix_len] == right[right.length() - 1 - common_suffix_len]) {\n        common_suffix_len++;\n    }\n\n    // If there's no common suffix, return empty string\n    if (common_suffix_len == 0) {\n        return \"\";\n    }\n\n    // Extract the common suffix\n    std::string common_suffix = left.substr(left.length() - common_suffix_len);\n\n    // Find the last occurrence of the common suffix in the full string\n    size_t pos = full.rfind(common_suffix);\n\n    // If not found, return empty string\n    if (pos == std::string::npos) {\n        return \"\";\n    }\n\n    // Return everything after the common suffix\n    return full.substr(pos + common_suffix_len);\n}\n",
+    "code_start_line": 237
   },
   {
     "query": "Find the code that true if this implementation requires the target's multi-layer tap capture (see llama_set_capture_layers / llama_get_embeddings_capture_ith)",
@@ -261,7 +308,9 @@
     "gold_files": [
       "common/speculative.cpp",
       "common/speculative.h"
-    ]
+    ],
+    "code": "    // true if this implementation requires the target's multi-layer tap capture\n    // (see llama_set_capture_layers / llama_get_embeddings_capture_ith)\n    virtual bool need_embd_capture() const { return false; }\n",
+    "code_start_line": 189
   },
   {
     "query": "Find the code that for displaying source code around error position",
@@ -272,7 +321,9 @@
     "hardness": "comment",
     "gold_files": [
       "common/jinja/utils.h"
-    ]
+    ],
+    "code": "// for displaying source code around error position\nstatic std::string peak_source(const std::string & source, size_t pos, size_t max_peak_chars = 40) {\n    if (source.empty()) {\n        return \"(no source available)\";\n    }\n    std::string output;\n    size_t start = (pos >= max_peak_chars) ? (pos - max_peak_chars) : 0;\n    size_t end = std::min(pos + max_peak_chars, source.length());\n    std::string substr = source.substr(start, end - start);\n    string_replace_all(substr, \"\\n\", \"\u21b5\");\n    output += \"...\" + substr + \"...\\n\";\n    std::string spaces(pos - start + 3, ' ');\n    output += spaces + \"^\";\n    return output;\n}\n",
+    "code_start_line": 29
   },
   {
     "query": "Find the code that functionary v3.2 - uses recipient-based format: >>>recipient\\n{content}",
@@ -284,7 +335,9 @@
     "gold_files": [
       "common/chat.cpp",
       "common/chat.h"
-    ]
+    ],
+    "code": "// Functionary v3.2 - uses recipient-based format: >>>recipient\\n{content}\n",
+    "code_start_line": 1380
   },
   {
     "query": "Find the code that get actual scale based on rank and alpha",
@@ -296,7 +349,9 @@
     "gold_files": [
       "src/llama-adapter.h",
       "src/llama-adapter.cpp"
-    ]
+    ],
+    "code": "    // get actual scale based on rank and alpha\n    float get_scale(float alpha, float adapter_scale) const {\n        const float rank  = (float) b->ne[0];\n        const float scale = alpha ? adapter_scale * alpha / rank : adapter_scale;\n        return scale;\n    }\n",
+    "code_start_line": 53
   },
   {
     "query": "Find the code that simple version of \"llama_apply_chat_template\" that only works with strings This function uses heuristic checks to determine commonly used template. It is not a jinja parser.",
@@ -308,7 +363,9 @@
     "gold_files": [
       "src/llama-chat.cpp",
       "src/llama-chat.h"
-    ]
+    ],
+    "code": "// Simple version of \"llama_apply_chat_template\" that only works with strings\n// This function uses heuristic checks to determine commonly used template. It is not a jinja parser.\nint32_t llm_chat_apply_template(\n    llm_chat_template tmpl,\n    const std::vector<const llama_chat_message *> & chat,\n    std::string & dest, bool add_ass) {\n    // Taken from the research: https://github.com/ggml-org/llama.cpp/issues/5527\n    std::stringstream ss;\n    if (tmpl == LLM_CHAT_TEMPLATE_CHATML) {\n        // chatml template\n        for (auto message : chat) {\n            ss << \"<|im_start|>\" << message->role << \"\\n\" << message->content << \"<|im_end|>\\n\";\n        }\n        if (add_ass) {\n            ss << \"<|im_start|>assistant\\n\";\n        }\n    } else if (tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V7 || tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V7_TEKKEN) {\n        // Official mistral 'v7' template\n        // See: https://huggingface.co/mistralai/Mistral-Large-Instruct-2411#basic-instruct-template-v7\n        //      https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503#basic-instruct-template-v7-tekken\n        const char * trailing_space = tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V7 ? \" \" : \"\";\n        for (auto message : chat) {\n            std::string role(message->role);\n            std::string content(message->content);\n            if (role == \"system\") {\n                ss << \"[SYSTEM_PROMPT]\" << trailing_space << content << \"[/SYSTEM_PROMPT]\";\n            } else if (role == \"user\") {\n                ss << \"[INST]\" << trailing_space << content << \"[/INST]\";\n            } else {\n                ss << trailing_space << content << \"</s>\";\n            }\n        }\n    } else if (tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V1\n            || tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V3\n            || tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V3_TEKKEN) {\n        // See: https://github.com/mistralai/cookbook/blob/main/concept-deep-dive/tokenization/chat_templates.md\n        // See: https://github.com/mistralai/cookbook/blob/main/concept-deep-dive/tokenization/templates.md\n        std::string leading_space = tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V1 ? \" \" : \"\";\n        std::string trailing_space = tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V3_TEKKEN ? \"\" : \" \";\n        bool trim_assistant_message = tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V3;\n        bool is_inside_turn = false;\n        for (auto message : chat) {\n            if (!is_inside_turn) {\n                ss << leading_space << \"[INST]\" << trailing_space;\n                is_inside_turn = true;\n            }\n            std::string role(message->role);\n            std::string content(message->content);\n            if (role == \"system\") {\n                ss << content << \"\\n\\n\";\n            } else if (role == \"user\") {\n                ss << content << leading_space << \"[/INST]\";\n            } else {\n                ss << trailing_space << (trim_assistant_message ? trim(content) : content) << \"</s>\";\n                is_inside_turn = false;\n            }\n        }\n    } else if (\n            tmpl == LLM_CHAT_TEMPLATE_LLAMA_2\n            || tmpl == LLM_CHAT_TEMPLATE_LLAMA_2_SYS\n            || tmpl == LLM_CHAT_TEMPLATE_LLAMA_2_SYS_BOS\n            || tmpl == LLM_CHAT_TEMPLATE_LLAMA_2_SYS_STRIP) {\n        // llama2 template and its variants\n        // [variant] support system message\n        // See: https://huggingface.co/blog/llama2#how-to-prompt-llama-2\n        bool support_system_message = tmpl != LLM_CHAT_TEMPLATE_LLAMA_2;\n        // [variant] add BOS inside history\n        bool add_bos_inside_history = tmpl == LLM_CHAT_TEMPLATE_LLAMA_2_SYS_BOS;\n        // [variant] trim spaces from the input message\n        bool strip_message = tmpl == LLM_CHAT_TEMPLATE_LLAMA_2_SYS_STRIP;\n        // construct the prompt\n        bool is_inside_turn = true; // skip BOS at the beginning\n        ss << \"[INST] \";\n        for (auto message : chat) {\n            std::string content = strip_message ? trim(message->content) : message->content;\n            std::string role(message->role);\n            if (!is_inside_turn) {\n                is_inside_turn = true;\n                ss << (add_bos_inside_history ? \"<s>[INST] \" : \"[INST] \");\n            }\n            if (role == \"system\") {\n                if (support_system_message) {\n",
+    "code_start_line": 244
   },
   {
     "query": "Find the code that finalize and get the hash value note: after calling this component, the hasher state is modified, do not call update() again",
@@ -319,7 +376,9 @@
     "hardness": "comment",
     "gold_files": [
       "common/jinja/utils.h"
-    ]
+    ],
+    "code": "    // finalize and get the hash value\n    // note: after calling digest, the hasher state is modified, do not call update() again\n    size_t digest() noexcept {\n        // if there are remaining bytes in buffer, fill the rest with zeros and process\n        if (idx > 0) {\n            for (size_t i = idx; i < block_size; ++i) {\n                buffer[i] = 0;\n            }\n            update_block(buffer);\n            idx = 0;\n        }\n\n        return state;\n    }\n",
+    "code_start_line": 118
   },
   {
     "query": "Find the code that legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.",
@@ -331,7 +390,9 @@
     "gold_files": [
       "common/chat.cpp",
       "common/chat.h"
-    ]
+    ],
+    "code": "// Legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.\nstatic common_chat_params common_chat_templates_apply_legacy(const struct common_chat_templates *        tmpls,\n                                                             const struct common_chat_templates_inputs & inputs) {\n    size_t                          alloc_size = 0;\n    std::vector<llama_chat_message> chat;\n    std::vector<std::string>        contents;\n\n    for (const auto & msg : inputs.messages) {\n        auto content = msg.content;\n        for (const auto & part : msg.content_parts) {\n            if (part.type != \"text\" && part.type != \"media_marker\") {\n                LOG_WRN(\"Ignoring non-text content part: %s\\n\", part.type.c_str());\n                continue;\n            }\n            if (!content.empty()) {\n                content += \"\\n\";\n                ;\n            }\n            content += part.text;\n        }\n        contents.emplace_back(std::move(content));\n    }\n    for (size_t i = 0; i < contents.size(); ++i) {\n        const auto & msg     = inputs.messages[i];\n        const auto & content = contents[i];\n        chat.push_back({ msg.role.c_str(), content.c_str() });\n        size_t msg_size = msg.role.size() + content.size();\n        alloc_size += msg_size + (msg_size / 4);  // == msg_size * 1.25 but avoiding float ops\n    }\n\n    std::vector<char> buf(alloc_size);\n\n    // run the first time to get the total output length\n    const auto & src = tmpls->template_default->source();\n    int32_t      res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt,\n                                                 buf.data(), buf.size());\n\n    // error: chat template is not supported\n    if (res < 0) {\n        // if the custom \"tmpl\" is not supported, we throw an error\n        // this is a bit redundant (for good), since we're not sure if user validated the custom template with llama_chat_verify_template()\n        throw std::runtime_error(\"this custom template is not supported, try using --jinja\");\n    }\n\n    // if it turns out that our buffer is too small, we resize it\n    if ((size_t) res > buf.size()) {\n        buf.resize(res);\n        res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(),\n                                        buf.size());\n    }\n\n    // for safety, we check the result again\n    if (res < 0 || (size_t) res > buf.size()) {\n        throw std::runtime_error(\"failed to apply chat template, try using --jinja\");\n    }\n\n    common_chat_params params;\n    params.prompt = std::string(buf.data(), res);\n    if (!inputs.json_schema.empty()) {\n        params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));\n    } else {\n        params.grammar = inputs.grammar;\n    }\n    return params;\n}\n",
+    "code_start_line": 2398
   },
   {
     "query": "Find the code that helper function to remove the last UTF-8 character from a string",
@@ -343,7 +404,9 @@
     "gold_files": [
       "common/console.cpp",
       "common/console.h"
-    ]
+    ],
+    "code": "    // Helper function to remove the last UTF-8 character from a string\n    static size_t prev_utf8_char_pos(const std::string & line, size_t pos) {\n        if (pos == 0) return 0;\n        pos--;\n        while (pos > 0 && (line[pos] & 0xC0) == 0x80) {\n            pos--;\n        }\n        return pos;\n    }\n",
+    "code_start_line": 432
   },
   {
     "query": "Find the code that download one single file from remote URL to local path returns status code or -1 on error",
@@ -355,7 +418,9 @@
     "gold_files": [
       "common/download.cpp",
       "common/download.h"
-    ]
+    ],
+    "code": "// download one single file from remote URL to local path\n// returns status code or -1 on error\nstatic int common_download_file_single_online(const std::string & url,\n                                              const std::string & path,\n                                              const common_download_opts & opts,\n                                              bool skip_etag) {\n    static const int max_attempts        = 3;\n    static const int retry_delay_seconds = 2;\n\n    const bool file_exists = std::filesystem::exists(path);\n\n    if (!file_exists && opts.skip_download) {\n        return -2; // file is missing and download is disabled\n    }\n\n    if (file_exists && skip_etag) {\n        LOG_DBG(\"%s: using cached file: %s\\n\", __func__, path.c_str());\n        return 304; // 304 Not Modified - fake cached response\n    }\n\n    auto [cli, parts] = common_http_client(url);\n\n    httplib::Headers headers;\n    for (const auto & h : opts.headers) {\n        headers.emplace(h.first, h.second);\n    }\n    if (headers.find(\"User-Agent\") == headers.end()) {\n        headers.emplace(\"User-Agent\", \"llama-cpp/\" + std::string(llama_build_info()));\n    }\n    if (!opts.bearer_token.empty()) {\n        headers.emplace(\"Authorization\", \"Bearer \" + opts.bearer_token);\n    }\n    cli.set_default_headers(headers);\n\n    std::string last_etag;\n    if (file_exists) {\n        last_etag = read_etag(path);\n    } else {\n        LOG_DBG(\"%s: no previous model file found %s\\n\", __func__, path.c_str());\n    }\n\n    auto head = cli.Head(parts.path);\n    if (!head || head->status < 200 || head->status >= 300) {\n        LOG_TRC(\"%s: HEAD failed, status: %d\\n\", __func__, head ? head->status : -1);\n        if (file_exists) {\n            LOG_TRC(\"%s: using cached file (HEAD failed): %s\\n\", __func__, path.c_str());\n            return 304; // 304 Not Modified - fake cached response\n        }\n        return head ? head->status : -1;\n    }\n\n    std::string etag;\n    if (head->has_header(\"ETag\")) {\n        etag = head->get_header_value(\"ETag\");\n    }\n\n    common_download_progress p;\n    p.url = url;\n    if (head->has_header(\"Content-Length\")) {\n        try {\n            p.total = std::stoull(head->get_header_value(\"Content-Length\"));\n        } catch (const std::exception& e) {\n            LOG_WRN(\"%s: invalid Content-Length in HEAD response: %s\\n\", __func__, e.what());\n        }\n    }\n\n    bool supports_ranges = false;\n    if (head->has_header(\"Accept-Ranges\")) {\n        supports_ranges = head->get_header_value(\"Accept-Ranges\") != \"none\";\n    }\n\n    if (file_exists) {\n        if (etag.empty()) {\n            LOG_DBG(\"%s: using cached file (no server etag): %s\\n\", __func__, path.c_str());\n            return 304; // 304 Not Modified - fake cached response\n        }\n        if (!last_etag.empty() && last_etag == etag) {\n            LOG_DBG(\"%s: using cached file (same etag): %s\\n\", __func__, path.c_str());\n            return 304; // 304 Not Modified - fake cached response\n        }\n        // pass this point, the file exists but is different from the server version, so we need to redownload it\n        if (opts.skip_download) {\n            return -2; // special code to indicate that the download was skipped due to etag mismatch\n        }\n        if (remove(path.c_str()) != 0) {\n            LOG_ERR(\"%s: unable to delete file: %s\\n\", __func__, path.c_str());\n            return -1;\n        }\n    }\n\n    { // silent\n        std::error_code ec;\n        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);\n    }\n\n    bool success = false;\n    const std::string path_temporary = path + \".downloadInProgress\";\n    int delay = retry_delay_seconds;\n\n    if (opts.callback) {\n        opts.callback->on_start(p);\n    }\n\n    for (int i = 0; i < max_attempts; ++i) {\n        if (opts.callback && opts.callback->is_cancelled()) {\n            break;\n        }\n        if (i) {\n            LOG_WRN(\"%s: retrying after %d seconds...\\n\", __func__, delay);\n            std::this_thread::sleep_for(std::chrono::seconds(delay));\n            delay *= retry_delay_seconds;\n        }\n\n        size_t existing_size = 0;\n\n        if (std::filesystem::exists(path_temporary)) {\n            if (supports_ranges) {\n                existing_size = std::filesystem::file_size(path_temporary);\n            } else if (remove(path_temporary.c_str()) != 0) {\n                LOG_ERR(\"%s: unable to delete file: %s\\n\", __func__, path_temporary.c_str());\n                break;\n            }\n        }\n\n        p.downloaded = existing_size;\n\n        LOG_DBG(\"%s: downloading from %s to %s (etag:%s)...\\n\",\n                __func__, common_http_show_masked_url(parts).c_str(),\n                path_temporary.c_str(), etag.c_str());\n\n        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {\n            if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {\n                LOG_ERR(\"%s: unable to rename file: %s to %s\\n\", __func__, path_temporary.c_str(), path.c_str());\n                break;\n            }\n            if (!etag.empty() && !skip_etag) {\n                write_etag(path, etag);\n            }\n            success = true;\n            break;\n        }\n    }\n\n    if (opts.callback) {\n        opts.callback->on_done(p, success);\n    }\n    if (opts.callback && opts.callback->is_cancelled() &&\n        std::filesystem::exists(path_temporary)) {\n        if (remove(path_temporary.c_str()) != 0) {\n            LOG_ERR(\"%s: unable to delete temporary file: %s\\n\", __func__, path_temporary.c_str());\n        }\n    }\n    if (!success) {\n        LOG_ERR(\"%s: download failed after %d attempts\\n\", __func__, max_attempts);\n        return -1; // max attempts reached\n    }\n\n    return head->status;\n}\n",
+    "code_start_line": 286
   },
   {
     "query": "Find the code that low-level tag methods (from former common_chat_peg_base_builder)",
@@ -367,7 +432,9 @@
     "gold_files": [
       "common/chat-peg-parser.h",
       "common/chat-peg-parser.cpp"
-    ]
+    ],
+    "code": "    // Low-level tag methods (from former common_chat_peg_base_builder)\n    common_peg_parser reasoning_block(const common_peg_parser & p) { return tag(REASONING_BLOCK, p); }\n",
+    "code_start_line": 68
   },
   {
     "query": "Find the code that base chars [A-Za-z0-9_] are always valid special chars [/.-] must be surrounded by base chars exactly one '/' required",
@@ -379,7 +446,9 @@
     "gold_files": [
       "common/hf-cache.cpp",
       "common/hf-cache.h"
-    ]
+    ],
+    "code": "// base chars [A-Za-z0-9_] are always valid\n// special chars [/.-] must be surrounded by base chars\n// exactly one '/' required\nstatic bool is_valid_repo_id(const std::string & repo_id) {\n    if (repo_id.empty() || repo_id.length() > 256) {\n        return false;\n    }\n    int slash = 0;\n    bool special = true;\n\n    for (const char c : repo_id) {\n        if (is_alphanum(c) || c == '_') {\n            special = false;\n        } else if (is_special_char(c)) {\n            if (special) {\n                return false;\n            }\n            slash += (c == '/');\n            special = true;\n        } else {\n            return false;\n        }\n    }\n    return !special && slash == 1;\n}\n",
+    "code_start_line": 121
   },
   {
     "query": "Find the code that dspark drafter target-context staging C API",
@@ -391,7 +460,9 @@
     "gold_files": [
       "src/llama-context.cpp",
       "src/llama-context.h"
-    ]
+    ],
+    "code": "// dspark drafter target-context staging C API --------------------------------\n\nvoid llama_set_dspark_ctx(\n        llama_context * ctx,\n        const float   * feat,\n              int64_t   n_ctx_rows,\n              int64_t   n_embd_cap) {\n    ctx->set_dspark_ctx(feat, n_ctx_rows, n_embd_cap);\n}\n",
+    "code_start_line": 4053
   },
   {
     "query": "Find the code that like python_value(), but the leaf also accepts JSON-cased true/false/null, used by LFM2/LFM2.5",
@@ -403,7 +474,9 @@
     "gold_files": [
       "common/chat-peg-parser.cpp",
       "common/chat-peg-parser.h"
-    ]
+    ],
+    "code": "// Like python_value(), but the leaf also accepts JSON-cased true/false/null, used by LFM2/LFM2.5\ncommon_peg_parser common_chat_peg_builder::python_or_json_value() {\n    return rule(\"python-or-json-value\", [this]() {\n        auto ws    = space();\n        auto value = python_or_json_value();\n\n        auto member  = sequence({ python_string(), ws, literal(\":\"), ws, value });\n        auto members = sequence({ member, zero_or_more(sequence({ ws, literal(\",\"), ws, member })) });\n        auto dict    = rule(\"python-or-json-dict\", [&]() {\n            return sequence({ literal(\"{\"), ws, choice({ literal(\"}\"), sequence({ members, ws, literal(\"}\") }) }), ws });\n        });\n\n        auto elements = sequence({ value, zero_or_more(sequence({ literal(\",\"), ws, value })) });\n        auto array    = rule(\"python-or-json-array\", [&]() {\n            return sequence({ literal(\"[\"), ws, choice({ literal(\"]\"), sequence({ elements, ws, literal(\"]\") }) }), ws });\n        });\n\n        return choice({ dict, array, python_string(), python_number(),\n                        python_bool(), python_null(), json_bool(), json_null() });\n    });\n",
+    "code_start_line": 491
   },
   {
     "query": "Find the code that helper to check type without asserting (useful for logic)",
@@ -415,7 +488,9 @@
     "gold_files": [
       "common/jinja/parser.cpp",
       "common/jinja/parser.h"
-    ]
+    ],
+    "code": "// Helper to check type without asserting (useful for logic)\ntemplate<typename T>\nstatic bool is_type(const statement_ptr & ptr) {\n    return dynamic_cast<const T*>(ptr.get()) != nullptr;\n}\n",
+    "code_start_line": 16
   },
   {
     "query": "Find the code that if we return true, a follow-up call will be made with ask=false in which we can do the actual collection. see ggml_backend_sched_eval_callback @param user_data user data to pass at",
@@ -427,7 +502,9 @@
     "gold_files": [
       "common/debug.cpp",
       "common/debug.h"
-    ]
+    ],
+    "code": "/**\n * GGML operations callback during the graph execution.\n *\n * @param t current tensor\n * @param ask when ask is true, the scheduler wants to know if we are interested in data from this tensor\n *            if we return true, a follow-up call will be made with ask=false in which we can do the actual collection.\n *            see ggml_backend_sched_eval_callback\n * @param user_data user data to pass at each call back\n * @return true to receive data or continue the graph, false otherwise\n */\nbool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {\n    auto * cb_data = (common_debug_cb_user_data *) user_data;\n    auto * pimpl = cb_data->pimpl.get();\n\n    const struct ggml_tensor * src0 = t->src[0];\n    const struct ggml_tensor * src1 = t->src[1];\n\n    if (ask) {\n        return true;  // Always retrieve data\n    }\n\n    bool matches_filter = pimpl->tensor_filters.empty();\n\n    if (!matches_filter) {\n        for (const auto & filter : pimpl->tensor_filters) {\n            if (std::regex_search(t->name, filter)) {\n                matches_filter = true;\n                break;\n            }\n        }\n    }\n\n    char src1_str[128] = { 0 };\n    if (src1) {\n        snprintf(src1_str, sizeof(src1_str), \"%s{%s}\", src1->name, common_ggml_ne_string(src1).c_str());\n    }\n\n    if (matches_filter) {\n        LOG(\"%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\\n\", __func__, t->name, ggml_type_name(t->type),\n            ggml_op_desc(t), src0->name, common_ggml_ne_string(src0).c_str(), src1 ? src1_str : \"\",\n            common_ggml_ne_string(t).c_str());\n    }\n",
+    "code_start_line": 143
   },
   {
     "query": "Find the code that function that mimics Python's array slicing.",
@@ -439,7 +516,9 @@
     "gold_files": [
       "common/jinja/value.cpp",
       "common/jinja/value.h"
-    ]
+    ],
+    "code": "/**\n * Function that mimics Python's array slicing.\n */\ntemplate<typename T>\nstatic T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {\n    int64_t len = static_cast<int64_t>(array.size());\n    int64_t direction = (step > 0) ? 1 : ((step < 0) ? -1 : 0);\n    int64_t start_val = 0;\n    int64_t stop_val = 0;\n    if (direction >= 0) {\n        start_val = start;\n        if (start_val < 0) {\n            start_val = std::max(len + start_val, (int64_t)0);\n        } else {\n            start_val = std::min(start_val, len);\n        }\n\n        stop_val = stop;\n        if (stop_val < 0) {\n            stop_val = std::max(len + stop_val, (int64_t)0);\n        } else {\n            stop_val = std::min(stop_val, len);\n        }\n    } else {\n        start_val = len - 1;\n        if (start_val < 0) {\n            start_val = std::max(len + start_val, (int64_t)-1);\n        } else {\n            start_val = std::min(start_val, len - 1);\n        }\n\n        stop_val = -1;\n        if (stop_val < -1) {\n            stop_val = std::max(len + stop_val, (int64_t)-1);\n        } else {\n            stop_val = std::min(stop_val, len - 1);\n        }\n    }\n    T result;\n    if (direction == 0) {\n        return result;\n    }\n    for (int64_t i = start_val; direction * i < direction * stop_val; i += step) {\n        if (i >= 0 && i < len) {\n            result.push_back(array[static_cast<size_t>(i)]);\n        }\n    }\n    return result;\n}\n",
+    "code_start_line": 72
   },
   {
     "query": "Find the code that helpers NOTE: assumes valid utf8 (but checks for overrun)",
@@ -451,7 +530,9 @@
     "gold_files": [
       "src/llama-grammar.cpp",
       "src/llama-grammar.h"
-    ]
+    ],
+    "code": "// NOTE: assumes valid utf8 (but checks for overrun)\nstatic std::pair<uint32_t, const char *> decode_utf8(const char * src) {\n    static const int lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };\n    uint8_t  first_byte = static_cast<uint8_t>(*src);\n    uint8_t  highbits   = first_byte >> 4;\n    int      len        = lookup[highbits];\n    uint8_t  mask       = (1 << (8 - len)) - 1;\n    uint32_t value      = first_byte & mask;\n    const char * end    = src + len; // may overrun!\n    const char * pos    = src + 1;\n    for ( ; pos < end && *pos; pos++) {\n        value = (value << 6) + (static_cast<uint8_t>(*pos) & 0x3F);\n    }\n    return std::make_pair(value, pos);\n}\n",
+    "code_start_line": 19
   },
   {
     "query": "Find the code that helper for setting process priority",
@@ -463,7 +544,9 @@
     "gold_files": [
       "common/common.cpp",
       "common/common.h"
-    ]
+    ],
+    "code": "\nbool set_process_priority(enum ggml_sched_priority prio) {\n    if (prio == GGML_SCHED_PRIO_NORMAL) {\n        return true;\n    }\n\n    DWORD p = NORMAL_PRIORITY_CLASS;\n    switch (prio) {\n        case GGML_SCHED_PRIO_LOW:      p = BELOW_NORMAL_PRIORITY_CLASS; break;\n        case GGML_SCHED_PRIO_NORMAL:   p = NORMAL_PRIORITY_CLASS;       break;\n        case GGML_SCHED_PRIO_MEDIUM:   p = ABOVE_NORMAL_PRIORITY_CLASS; break;\n        case GGML_SCHED_PRIO_HIGH:     p = HIGH_PRIORITY_CLASS;         break;\n        case GGML_SCHED_PRIO_REALTIME: p = REALTIME_PRIORITY_CLASS;     break;\n    }\n\n    if (!SetPriorityClass(GetCurrentProcess(), p)) {\n        LOG_WRN(\"failed to set process priority class %d : (%d)\\n\", prio, (int) GetLastError());\n        return false;\n    }\n\n    return true;\n}\n",
+    "code_start_line": 212
   },
   {
     "query": "Find the code that recursively convert value to JSON string TODO: avoid circular references",
@@ -475,6 +558,8 @@
     "gold_files": [
       "common/jinja/value.cpp",
       "common/jinja/value.h"
-    ]
+    ],
+    "code": "// recursively convert value to JSON string\n// TODO: avoid circular references\nstatic void value_to_json_internal(std::ostringstream & oss, const value & val, int curr_lvl, int indent, const std::string_view item_sep, const std::string_view key_sep) {\n    auto indent_str = [indent, curr_lvl]() -> std::string {\n        return (indent > 0) ? std::string(curr_lvl * indent, ' ') : \"\";\n    };\n    auto newline = [indent]() -> std::string {\n        return (indent >= 0) ? \"\\n\" : \"\";\n    };\n\n    if (is_val<value_none>(val) || val->is_undefined()) {\n        oss << \"null\";\n    } else if (is_val<value_bool>(val)) {\n        oss << (val->as_bool() ? \"true\" : \"false\");\n    } else if (is_val<value_int>(val)) {\n        oss << val->as_int();\n    } else if (is_val<value_float>(val)) {\n        oss << val->as_float();\n    } else if (is_val<value_string>(val)) {\n        oss << \"\\\"\";\n        for (char c : val->as_string().str()) {\n            switch (c) {\n                case '\"': oss << \"\\\\\\\"\"; break;\n                case '\\\\': oss << \"\\\\\\\\\"; break;\n                case '\\b': oss << \"\\\\b\"; break;\n                case '\\f': oss << \"\\\\f\"; break;\n                case '\\n': oss << \"\\\\n\"; break;\n                case '\\r': oss << \"\\\\r\"; break;\n                case '\\t': oss << \"\\\\t\"; break;\n                default:\n                    if (static_cast<unsigned char>(c) < 0x20) {\n                        char buf[7];\n                        snprintf(buf, sizeof(buf), \"\\\\u%04x\", static_cast<unsigned char>(c));\n                        oss << buf;\n                    } else {\n                        oss << c;\n                    }\n            }\n        }\n        oss << \"\\\"\";\n    } else if (is_val<value_array>(val)) {\n        const auto & arr = val->as_array();\n        oss << \"[\";\n        if (!arr.empty()) {\n            oss << newline();\n            for (size_t i = 0; i < arr.size(); ++i) {\n                oss << indent_str() << (indent > 0 ? std::string(indent, ' ') : \"\");\n                value_to_json_internal(oss, arr[i], curr_lvl + 1, indent, item_sep, key_sep);\n                if (i < arr.size() - 1) {\n                    oss << item_sep;\n                }\n                oss << newline();\n            }\n            oss << indent_str();\n        }\n        oss << \"]\";\n    } else if (is_val<value_object>(val)) {\n        const auto & obj = val->as_ordered_object(); // IMPORTANT: need to keep exact order\n        oss << \"{\";\n        if (!obj.empty()) {\n            oss << newline();\n            size_t i = 0;\n            for (const auto & pair : obj) {\n                oss << indent_str() << (indent > 0 ? std::string(indent, ' ') : \"\");\n                value_to_json_internal(oss, mk_val<value_string>(pair.first->as_string().str()), curr_lvl + 1, indent, item_sep, key_sep);\n                oss << key_sep;\n                value_to_json_internal(oss, pair.second, curr_lvl + 1, indent, item_sep, key_sep);\n                if (i < obj.size() - 1) {\n                    oss << item_sep;\n                }\n                oss << newline();\n                ++i;\n            }\n            oss << indent_str();\n        }\n        oss << \"}\";\n    } else {\n        oss << \"null\";\n    }\n}\n",
+    "code_start_line": 1366
   }
 ]
