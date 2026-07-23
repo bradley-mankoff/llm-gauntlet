@@ -555,16 +555,18 @@ def make_codex_judge(
                         pass
                     texts: list[str] = []
                     final = ""
+                    buf = ""
                     t_deadline = _time.monotonic() + timeout
                     while _time.monotonic() < t_deadline:
                         try:
                             chunk = resp.read(4096)
                         except _socket.timeout:
-                            break  # stream stalled, return what we have
+                            break
                         except Exception as _rx:
                             raise RuntimeError(f"SSE read error: {_rx}") from _rx
                         if not chunk:
                             break
+                        buf += chunk.decode("utf-8", "replace")
                         while "\n" in buf:
                             line, buf = buf.split("\n", 1)
                             line = line.strip("\r")
