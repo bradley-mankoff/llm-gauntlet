@@ -545,6 +545,7 @@ def make_codex_judge(
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     # set socket-level read timeout so stream hangs don't block forever
                     import socket as _socket
+        from http.client import IncompleteRead
                     try:
                         fp = getattr(resp, "fp", None)
                         if fp is not None:
@@ -620,7 +621,7 @@ def make_codex_judge(
                         msg = (e.read() or b"").decode("utf-8", "replace").lower() + " " + msg
                     except Exception:
                         pass
-                retryable = code in {408, 409, 429, 500, 502, 503, 504} or any(
+                retryable = code in {408, 409, 429, 500, 502, 503, 504} or isinstance(e, (IncompleteRead,)) or any(
                     s in msg for s in ("rate", "429", "temporar", "overloaded", "timeout", "stream")
                 )
                 if not retryable or attempt >= 9:
