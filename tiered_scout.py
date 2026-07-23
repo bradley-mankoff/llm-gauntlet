@@ -555,7 +555,6 @@ def make_codex_judge(
                         pass
                     texts: list[str] = []
                     final = ""
-                    buf = ""
                     t_deadline = _time.monotonic() + timeout
                     while _time.monotonic() < t_deadline:
                         try:
@@ -564,6 +563,8 @@ def make_codex_judge(
                             break  # stream stalled, return what we have
                         except Exception as _rx:
                             raise RuntimeError(f"SSE read error: {_rx}") from _rx
+                        if not chunk:
+                            break
                         while "\n" in buf:
                             line, buf = buf.split("\n", 1)
                             line = line.strip("\r")
